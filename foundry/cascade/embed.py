@@ -9,6 +9,7 @@ from PIL import Image
 class Embedder:
     def __init__(self, backend='stub'):
         self.backend = backend
+        self.identity = "clip:clip-ViT-B-32:v1" if backend=="clip" else "stub:sha256-rng:v1"
         self.model = None
         if backend == 'clip':
             from sentence_transformers import SentenceTransformer
@@ -45,6 +46,15 @@ def top_k(vectors, query, k):
     return [(int(i),float(scores[i])) for i in np.argsort(-scores,kind='stable')[:k]]
 
 def filter_batch(db,batch,plan,raw,embedder,verifier,store):
+    identity=getattr(embedder,'identity','custom:'+type(embedder).__name__)
+    with db.conn:
+        stored=db.conn.execute("SELECT value FROM app_state WHERE key='embedding_backend'").fetchone()
+        if stored and stored[0]!=identity:
+            raise ValueError('Embedding backend differs from this dataset root; use a separate --root')
+        if not stored:
+            if db.conn.execute('SELECT 1 FROM embeddings LIMIT 1').fetchone():
+                raise ValueError('Existing embeddings have no backend identity; use a new --root')
+            db.conn.execute("INSERT INTO app_state VALUES('embedding_backend',?)",(identity,))
     rows=db.rows(batch)
     if not rows:
         raise ValueError('Batch has no harvested rows')

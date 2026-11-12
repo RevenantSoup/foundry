@@ -52,3 +52,20 @@ def test_cosine_duplicate_is_logged(tmp_path):
     filter_batch(db,'b',{'prompt':'x','refs':[],'target':1,'threshold':0.,'checklist':[]},
                  raw,Identical(),StubVerifier(),tmp_path)
     assert db.conn.execute("select count(*) from drops where reason='cosine'").fetchone()[0]==1
+
+def test_embedding_backend_cannot_change(tmp_path):
+    db=Database(tmp_path/'db')
+    from tests.test_db import row
+    r=row(batch_id='b'); db.insert(r)
+    raw=tmp_path/'raw'; raw.mkdir(); (raw/r.id).write_bytes(b'fixture')
+    class Backend:
+        identity='backend-a'
+        def images(self,paths): return np.array([[1.,0.]]*len(paths),dtype=np.float32)
+        def query(self,*args): return np.array([1.,0.])
+    plan={'prompt':'x','refs':[],'target':1,'threshold':0.,'checklist':[]}
+    backend=Backend()
+    filter_batch(db,'b',plan,raw,backend,StubVerifier(),tmp_path)
+    backend.identity='backend-b'
+    import pytest
+    with pytest.raises(ValueError,match='backend'):
+        filter_batch(db,'b',plan,raw,backend,StubVerifier(),tmp_path)

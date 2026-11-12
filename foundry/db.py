@@ -23,7 +23,8 @@ class Database:
         CREATE TABLE IF NOT EXISTS qa_samples(batch_id TEXT, row_id TEXT, position INT,
           verdict TEXT DEFAULT '', PRIMARY KEY(batch_id,row_id));
         CREATE TABLE IF NOT EXISTS embeddings(row_id TEXT PRIMARY KEY, vector BLOB NOT NULL);
-        PRAGMA user_version=1;
+        CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        PRAGMA user_version=2;
         """)
     def close(self):
         self.conn.close()
