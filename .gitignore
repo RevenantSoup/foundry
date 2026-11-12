@@ -4,3 +4,10 @@ __pycache__/
 *.egg-info/
 data/
 work/
+node_modules/
+.next/
+*.tsbuildinfo
+.env*
+!.env.example
+playwright-report/
+test-results/
