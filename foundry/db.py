@@ -24,7 +24,9 @@ class Database:
           verdict TEXT DEFAULT '', PRIMARY KEY(batch_id,row_id));
         CREATE TABLE IF NOT EXISTS embeddings(row_id TEXT PRIMARY KEY, vector BLOB NOT NULL);
         CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        PRAGMA user_version=2;
+        CREATE TABLE IF NOT EXISTS qa_files(batch_id TEXT, row_id TEXT, sha256 TEXT NOT NULL,
+          path TEXT NOT NULL, PRIMARY KEY(batch_id,row_id));
+        PRAGMA user_version=3;
         """)
     def close(self):
         self.conn.close()

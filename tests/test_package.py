@@ -46,7 +46,8 @@ def test_qa_blocks_and_package_versions(tmp_path):
     assert all(all(v != '' for v in row.values()) for row in rows)
     assert package_batch(db,'b',raw,tmp_path/'packages')==path
     (raw/'0').write_bytes(b'tampered')
-    assert package_batch(db,'b',raw,tmp_path/'packages')!=path
+    with pytest.raises(ValueError,match='changed'):
+        package_batch(db,'b',raw,tmp_path/'packages')
 
 def test_package_null_licence_refused(tmp_path):
     db,raw=dataset(tmp_path)

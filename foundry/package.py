@@ -12,7 +12,7 @@ def package_batch(db,batch,raw,destination):
     # Validate all batch records, including records not selected for export.
     for row in db.rows(batch):
         validate_rights(row)
-    check_qa(db,batch)
+    check_qa(db,batch,raw)
     rows=selected_rows(db,batch)
     if not rows:
         raise ValueError('No accepted rows')
