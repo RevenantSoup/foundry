@@ -66,3 +66,27 @@ def test_cli_quota_exit_two(tmp_path,monkeypatch):
 @pytest.mark.parametrize('command',['plan','harvest','filter','qa','package'])
 def test_help(command):
     assert CliRunner().invoke(cli,[command,'--help']).exit_code==0
+
+def test_ffmpeg_source_failure_isolated(tmp_path,monkeypatch):
+    import ffmpeg
+    refs(tmp_path/'refs'); runner=CliRunner(); root=tmp_path/'data'
+    invoke(runner,root,'plan','--prompt','x','--refs',str(tmp_path/'refs'))
+    batch=json.loads(next((root/'plans').glob('*.json')).read_text())['batch_id']
+    def broken(*args): raise ffmpeg.Error('ffmpeg',b'',b'invalid video')
+    monkeypatch.setattr('foundry.cli.YouTubeAdapter.search',broken)
+    result=invoke(runner,root,'harvest','--batch',batch,'--limit','2')
+    assert result.exit_code==0,result.exception
+    assert {r.source for r in Database(root/'foundry.sqlite3').rows(batch)}=={'openverse'}
+
+def test_existing_id_with_changed_url_preserves_bytes(tmp_path,monkeypatch):
+    refs(tmp_path/'refs'); runner=CliRunner(); root=tmp_path/'data'
+    invoke(runner,root,'plan','--prompt','x','--refs',str(tmp_path/'refs'))
+    batch=json.loads(next((root/'plans').glob('*.json')).read_text())['batch_id']
+    assert invoke(runner,root,'harvest','--batch',batch,'--limit','1').exit_code==0
+    row=next(r for r in Database(root/'foundry.sqlite3').rows(batch) if r.source=='openverse')
+    path=root/'raw'/row.id; original=path.read_bytes()
+    row.source_url+='/changed'
+    monkeypatch.setattr('foundry.cli.OpenverseAdapter.search',lambda *args:[row])
+    result=invoke(runner,root,'harvest','--batch',batch,'--limit','1')
+    assert result.exit_code==0,result.output
+    assert path.exists() and path.read_bytes()==original

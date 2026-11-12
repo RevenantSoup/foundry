@@ -10,6 +10,7 @@ import click
 import imagehash
 from PIL import Image
 import requests
+import ffmpeg
 from .db import Database
 from .adapters.openverse import OpenverseAdapter
 from .adapters.youtube import YouTubeAdapter
@@ -85,12 +86,17 @@ def harvest(obj,batch,video_dir,limit):
             rows=adapter.search(plan['search_terms'][0],limit or 2*plan['target'])
         except QuotaExceeded:
             raise
-        except (requests.RequestException,OSError,ValueError,KeyError) as error:
+        except (requests.RequestException,OSError,ValueError,KeyError,ffmpeg.Error) as error:
             failures+=1
             click.echo(f'{type(adapter).__name__}: {error}',err=True)
             continue
         for row in rows:
             row.batch_id=batch
+            if db.conn.execute('SELECT 1 FROM rows WHERE id=?',(row.id,)).fetchone():
+                with db.conn:
+                    db.conn.execute('INSERT OR IGNORE INTO seen_urls VALUES(?,?)',(row.source_url,row.id))
+                    db.drop(row,'existing_id')
+                continue
             if db.conn.execute('SELECT 1 FROM seen_urls WHERE url=?',(row.source_url,)).fetchone():
                 with db.conn: db.drop(row,'seen_url')
                 continue
@@ -108,7 +114,7 @@ def harvest(obj,batch,video_dir,limit):
                     path.unlink(missing_ok=True)
             except QuotaExceeded:
                 raise
-            except (requests.RequestException,OSError,ValueError,KeyError) as error:
+            except (requests.RequestException,OSError,ValueError,KeyError,ffmpeg.Error) as error:
                 with db.conn: db.drop(row,'fetch_or_rights: '+str(error))
                 click.echo(f'{row.id}: {error}',err=True)
     if failures==len(adapters):
