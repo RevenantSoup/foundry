@@ -33,10 +33,13 @@ def package_batch(db,batch,raw,destination):
             for row in rows:
                 shutil.copyfile(Path(raw)/row.id,images/row.id)
             write_manifest(staging/'manifest.csv',rows)
-            (staging/'dataset.json').write_text(json.dumps({'batch_id':batch,'version':version,'count':len(rows)},indent=2))
+            (staging/'dataset.json').write_text(json.dumps({'batch_id':batch,'version':version,'count':len(rows),
+                'manifest_sha256':hashlib.sha256((staging/'manifest.csv').read_bytes()).hexdigest()},indent=2))
             staging.rename(output)
         finally:
             if staging.exists(): shutil.rmtree(staging)
     for row in rows:
         db.update(row.id,split=row.split,qa_verdict=row.qa_verdict,provenance_hash=row.provenance_hash)
+    from .marketplace import register_dataset
+    register_dataset(db,output)
     return output

@@ -11,6 +11,7 @@ import requests
 from .base import Adapter, fixture_rows, fixture_bytes
 from ..models import Row
 from ..quota import consume
+from ..http import request_with_retry
 
 def extract_frames(path, destination):
     destination = Path(destination)
@@ -29,11 +30,12 @@ def extract_frames(path, destination):
             if 2 <= ts+2 < duration-2]
 
 class YouTubeAdapter(Adapter):
-    def __init__(self, db, offline=True, api_key=None, video_dir=None, session=None):
+    def __init__(self, db, offline=True, api_key=None, video_dir=None, session=None, batch_id=""):
         self.db, self.offline, self.api_key = db, offline, api_key
         self.video_dir = Path(video_dir) if video_dir else None
         self.session = session or requests.Session()
         self.files = {}
+        self.batch_id=batch_id
     def search(self,q,limit):
         if self.offline:
             return fixture_rows('youtube',q,limit,'platform_public_as_is')
@@ -41,8 +43,8 @@ class YouTubeAdapter(Adapter):
             raise ValueError('YOUTUBE_API_KEY is required')
         rows, token = [], None
         while len(rows) < limit:
-            consume(self.db,'youtube',100)
-            response = self.session.get('https://www.googleapis.com/youtube/v3/search',
+            response = request_with_retry(self.session,'get','https://www.googleapis.com/youtube/v3/search',
+                db=self.db,source='youtube',batch_id=self.batch_id,charge=lambda:consume(self.db,'youtube',100),
                 params={'key':self.api_key,'part':'snippet','q':q,'type':'video',
                         'maxResults':min(50,limit-len(rows)),'pageToken':token},timeout=30)
             response.raise_for_status()
@@ -57,6 +59,9 @@ class YouTubeAdapter(Adapter):
                     row = Row(id=id,source='youtube',source_url=f'https://www.youtube.com/watch?v={video}&t={ts/1000}',
                               licence='platform_public_as_is',
                               attribution=item['snippet']['channelTitle'],frame_ts_ms=ts)
+                    row.metadata={'licence_url':'https://www.youtube.com/static?template=terms',
+                        'creator':row.attribution,'title':item['snippet'].get('title',''),
+                        'source_page_url':f'https://www.youtube.com/watch?v={video}'}
                     rows.append(row); self.files[id]=file
                     if len(rows)==limit:
                         break

@@ -1,0 +1,66 @@
+import {test,expect} from "@playwright/test";
+import {execFileSync} from "node:child_process";
+import path from "node:path";
+let fixture:{dataset:string;batch:string;prompt:string;key:string;key_id:string;revoked:string;rate:string};
+test.beforeAll(()=>{
+ const repo=path.resolve(process.cwd(),"..");
+ const python=process.env.FOUNDRY_PYTHON||path.join(repo,".venv/bin/python");
+ fixture=JSON.parse(execFileSync(python,[path.join(repo,"web/e2e/setup-marketplace.py")],{
+  env:{...process.env,FOUNDRY_ROOT:path.join(repo,"work/web-test-data")},encoding:"utf8"}));
+});
+test("keyed buyer routes, legal manifest, rate limit and checkout placeholder",async({request})=>{
+ expect((await request.get("/api/v1/datasets")).status()).toBe(401);
+ expect((await request.get("/api/v1/datasets",{headers:{"X-API-Key":fixture.revoked}})).status()).toBe(403);
+ const headers={Authorization:"Bearer "+fixture.key};
+ const listed=await request.get("/api/v1/datasets?q="+encodeURIComponent(fixture.prompt)+"&licence=CC-BY&source=openverse&attribute=safety&min_size=200&max_size=200&free=true",{headers});
+ expect(listed.status()).toBe(200);expect((await listed.json()).total).toBe(1);
+ const manifest=await request.get("/api/v1/datasets/"+fixture.dataset+"/manifest",{headers});
+ expect(manifest.status()).toBe(200);
+ const body=await manifest.json();expect(body.attribution.length).toBeGreaterThan(0);expect(body.provenance_hash).toMatch(/^[a-f0-9]{64}$/);
+ expect(body.images.every((row:{licence:string;attribution:string})=>row.licence&&row.attribution)).toBe(true);
+ expect(body.dataset.samples).toHaveLength(12);
+ const checkout=await request.post("/api/v1/checkout",{headers});
+ expect(checkout.status()).toBe(501);expect((await checkout.json()).error).toBe("checkout_not_implemented");
+ // Fixed one-minute windows: pin the DB window to the current minute before one over-limit request.
+ const repo=path.resolve(process.cwd(),"..");const python=process.env.FOUNDRY_PYTHON||path.join(repo,".venv/bin/python");
+ execFileSync(python,["-c","import os,time,hashlib;from foundry.db import Database;d=Database(os.environ['FOUNDRY_ROOT']+'/foundry.sqlite3');k=d.conn.execute('select id from api_keys where name=?',('rate-browser-test',)).fetchall()[-1][0];d.conn.execute('insert or replace into api_rate_limits values(?,?,60)',(k,int(time.time())//60*60));d.conn.commit()"],{cwd:repo,env:{...process.env,FOUNDRY_ROOT:path.join(repo,"work/web-test-data")}});
+ const limited=await request.get("/api/v1/datasets",{headers:{"X-API-Key":fixture.rate}});
+ expect(limited.status()).toBe(429);expect(Number(limited.headers()["retry-after"])).toBeGreaterThan(0);
+});
+test("combined URL filters, detail attribution, reviewed samples and USD pricing",async({page,request})=>{
+ const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));
+ await page.goto("/datasets");
+ await page.getByLabel("Keyword",{exact:true}).fill(fixture.prompt);
+ await page.getByLabel("Licence",{exact:true}).selectOption("CC-BY");
+ await page.getByLabel("Source",{exact:true}).selectOption("openverse");
+ await page.getByLabel("Attribute / label",{exact:true}).fill("safety");
+ await page.getByLabel("Minimum images",{exact:true}).fill("200");
+ await page.getByLabel("Maximum images",{exact:true}).fill("200");
+ await page.getByLabel("Free only",{exact:true}).check();
+ await page.getByRole("button",{name:"Apply filters"}).click();
+ await expect(page).toHaveURL(/licence=CC-BY/);
+ await page.getByRole("link",{name:fixture.prompt,exact:true}).click();
+ await expect(page).toHaveURL("/datasets/"+fixture.dataset);
+ await expect(page.getByRole("heading",{level:1,name:fixture.prompt,exact:true})).toBeVisible();
+ await expect(page.getByRole("heading",{name:"Free",exact:true})).toBeVisible();
+ await expect(page.locator(".dataset-samples img")).toHaveCount(12);
+ await page.getByText("Full creator and source records (200)").click();
+ await expect(page.getByText("Test creator — fixture only",{exact:true}).first()).toBeVisible();
+ await page.getByLabel("Owner listing price · USD",{exact:true}).fill("49.99");
+ await page.getByRole("button",{name:"Save listing price"}).click();
+ await expect(page.getByText("USD listing price saved.")).toBeVisible();
+ const detail=await(await request.get("/api/datasets/"+fixture.dataset)).json();expect(detail.price_cents).toBe(4999);
+ await expect(page.getByRole("heading",{name:"$49.99",exact:true})).toBeVisible();
+ await page.getByRole("button",{name:"Buy dataset",exact:true}).click();
+ await expect(page.getByText("Checkout is not live yet — this is a placeholder. No payment will be taken.")).toBeVisible();
+ expect(await page.locator('input[autocomplete="cc-number"]').count()).toBe(0);
+ await page.screenshot({path:"/tmp/foundry-phase3-detail.png",fullPage:true});
+ await page.goto("/datasets?q="+encodeURIComponent(fixture.prompt)+"&free=true");
+ await expect(page.getByRole("heading",{name:"No datasets match yet."})).toBeVisible();
+ await page.setViewportSize({width:390,height:844});
+ await page.goto("/datasets/"+fixture.dataset);
+ await expect(page).toHaveURL("/datasets/"+fixture.dataset);
+ await expect(page.getByRole("heading",{level:1,name:fixture.prompt,exact:true})).toBeVisible();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ expect(errors).toEqual([]);
+});

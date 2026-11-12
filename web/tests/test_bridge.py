@@ -47,19 +47,28 @@ def test_secrets_redacted_from_logs(monkeypatch):
     assert bridge.redact('HTTP error ?key=private-key')=='HTTP error ?key=[redacted]'
 
 def test_listing_prices_persist_and_restricted_prices_fail(tmp_path,monkeypatch):
-    import csv,json
+    # Phase 3 prices require a real registry entry with valid QA and rights.
+    from tests.test_package import dataset,verdict_file
+    from foundry.qa import create_sheet,read_verdicts
+    from foundry.package import package_batch
+    db,raw=dataset(tmp_path)
+    db.close();(tmp_path/'db').rename(tmp_path/'foundry.sqlite3')
+    from foundry.db import Database
+    db=Database(tmp_path/'foundry.sqlite3')
+    with db.conn:db.conn.execute("update rows set source='openverse'")
+    create_sheet(db,'b',raw,tmp_path/'qa')
+    verdicts=tmp_path/'verdicts.csv';verdict_file(db,verdicts)
+    read_verdicts(db,'b',verdicts)
+    directory=package_batch(db,'b',raw,tmp_path/'packages')
     monkeypatch.setenv('FOUNDRY_ROOT',str(tmp_path))
-    directory=tmp_path/'packages'/'cleared';directory.mkdir(parents=True)
-    (directory/'dataset.json').write_text(json.dumps({'batch_id':'b','version':'v','count':1}))
-    with (directory/'manifest.csv').open('w',newline='') as stream:
-        writer=csv.DictWriter(stream,fieldnames=['licence','attribution','source_url','split','provenance_hash'])
-        writer.writeheader();writer.writerow({'licence':'CC-BY','attribution':'Author','source_url':'https://example.org/image','split':'train','provenance_hash':'hash'})
-    assert bridge.price({'package':'cleared','price':42.25})=={'price':42.25}
+    result=bridge.price({'package':directory.name,'price':42.25})
+    assert result['price_cents']==4225
     assert bridge.read_packages()[0]['price']==42.25
-    with pytest.raises(ValueError):bridge.price({'package':'cleared','price':-1})
+    with pytest.raises(ValueError):bridge.price({'package':directory.name,'price':-1})
     manifest=directory/'manifest.csv'
-    manifest.write_text(manifest.read_text().replace('CC-BY','platform_public_as_is'))
-    with pytest.raises(ValueError,match='rights-cleared'):bridge.price({'package':'cleared','price':3})
+    manifest.write_text(manifest.read_text().replace('CC0','platform_public_as_is'))
+    with pytest.raises(ValueError):bridge.price({'package':directory.name,'price':3})
+
 
 def test_negative_cosine_scores_have_an_honest_distribution(tmp_path,monkeypatch):
     from foundry.db import Database

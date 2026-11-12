@@ -282,8 +282,8 @@ documented in the CLI section above.
 ### How the bridge works
 
 Next.js Node-runtime routes under **web/app/api/** spawn **web/bridge.py** using
-the configured Python interpreter. The bridge reads SQLite through a read-only
-connection, reads package manifests and QA artifacts, and invokes
+the configured Python interpreter. The bridge reads source rows through read-only SQLite connections, reads package
+manifests and QA artifacts, and invokes
 **python -m foundry.cli --root <FOUNDRY_ROOT>** for every pipeline mutation.
 There is no parallel mock backend and no rewrite of the CLI.
 
@@ -300,8 +300,9 @@ There is no parallel mock backend and no rewrite of the CLI.
   ZIPs contain the immutable package images, manifest, and dataset metadata.
 - POST **/api/price** stores validated draft prices for eligible packages.
 
-Bridge jobs, uploaded references, review CSVs, download caches, and prices live
-under **data/web/** and are ignored by Git. Uploaded files are named by index,
+Bridge jobs, uploaded references, review CSVs, and download caches live under
+**data/web/** and are ignored by Git. Phase 3 prices, usage, schedules and API-key
+hashes live in SQLite. Uploaded files are named by index,
 and batch/package identifiers are validated before filesystem access.
 Cross-origin mutation requests are refused. Jobs run on the local server, so this
 bridge requires a persistent Node/Python host; it is not a static export or a
@@ -326,3 +327,200 @@ sample through the UI, deliberately fails QA at 179/200, checks server-side
 packaging refusal, corrects the verdicts, packages 200 rows, and verifies downloads,
 manifest filtering, catalog, analytics, navigation and mobile overflow. API tests
 also cover malformed uploads, path traversal, and cross-origin writes.
+
+## Phase 3 — Live marketplace + buyer API
+
+Phase 3 extends the existing CLI and web routes. It adds live-provider resilience,
+a SQLite dataset registry with pricing and manifest fingerprints, combined
+marketplace discovery, dataset detail pages, read-only buyer keys, and cron
+schedules. It adds no payment processing, dashboard authentication, queue service,
+new source, training, or deployment system.
+
+### Live requests, metadata and usage
+
+- Openverse uses its real paginated API and admits only CC0 / CC-BY / CC-BY-SA.
+  Missing licence/creator results are rejected and logged in drops. Accepted
+  rows additionally retain creator, title, original image URL, source-page URL
+  and licence URL in **image_metadata**.
+- YouTube uses the existing **quota** table, keyed by source and UTC day.
+  Every search.list attempt, including each retry, is charged **100** before
+  the request. The ceiling stays **10,000/day**. A local cap or provider
+  403 quotaExceeded/dailyLimitExceeded raises exit **2**, showing local units
+  used, remaining units, and the next UTC-midnight reset. Provider exhaustion is
+  recorded in quota_blocks until that reset; it is not silently truncated.
+- Openverse/YouTube/OpenAI retry HTTP 429, 5xx and transient network failures
+  at most **three times after the initial request**, with 1/2/4-second exponential
+  backoff and bounded request timeouts. Other HTTP errors fail immediately.
+  Provider error messages omit request URLs/credentials. Exhausted live download
+  or source-search failures preserve other saved rows, then fail the batch with
+  exit 1 so the same batch ID can resume.
+- The OpenAI verifier still sees only the top **3 × target** shortlist. HTTP and
+  invalid-verdict failures never become accept. Request latency, errors/retries,
+  and returned token counts are recorded. Billed USD cost is not returned by the
+  API, so it remains unknown rather than being invented.
+- **usage_log** records provider/day/batch events, status, retries, latency,
+  optional tokens/cost, and buyer usage. It never stores API keys. **/api/usage**
+  and the existing Overview/Analytics pages show daily totals and an explicit
+  warning at **80% YouTube usage** or provider quota exhaustion.
+
+Environment configuration remains in **web/.env.local** / process environment:
+
+| Variable | Purpose |
+| --- | --- |
+| OPENVERSE_API_KEY | Optional Openverse OAuth bearer access token; public API access is attempted when unset. Never forwarded to third-party image hosts. |
+| YOUTUBE_API_KEY | Live YouTube Data API key. |
+| OPENAI_API_KEY | Live verifier API key. |
+| FOUNDRY_ROOT | Web dataset directory (or repository root); use the matching CLI --root path. |
+| FOUNDRY_PYTHON | Python interpreter with the installed CLI dependencies. |
+| FOUNDRY_VIDEO_DIR | Authorized local YouTube video files for the web bridge. Scheduled specs can set video_dir. |
+
+Never commit .env.local, secrets, API keys, or generated data. **web/.env.example**
+contains names and comments only. ffmpeg trimming, the 40-frame cap, dedupe rules,
+required rights, and the 0.90 QA gate remain unchanged.
+
+### Recurring pipelines
+
+Create a JSON specification, for example **specs/safety.json**:
+
+```json
+{
+  "prompt": "people in safety glasses",
+  "refs": "../refs",
+  "target": 200,
+  "threshold": 0.28,
+  "offline": false,
+  "video_dir": "../licensed-videos",
+  "verdicts": "../reviews/{batch_id}.csv"
+}
+```
+
+Exactly six reference images are required. Relative paths resolve from the spec
+file's directory. offline defaults to false for schedules; use true only for
+explicit synthetic workflow demonstrations. verdicts/video_dir are optional.
+The verdict path can contain {batch_id}; it must contain all 200 reviewed IDs,
+with accept/reject values, before QA can pass.
+
+```bash
+foundry --root ./data schedule add --spec ./specs/safety.json --interval daily --time 10:00
+foundry --root ./data schedule list
+foundry --root ./data run-scheduled
+foundry --root ./data schedule remove <schedule-id>
+```
+
+Times are **UTC**. Weekly schedules recur seven days from the first selected UTC
+occurrence. **schedules** stores ID, spec path, interval, next/last timestamps,
+batch ID, enabled flag, time and status/error; schedule_log records stage output
+and lock skips. Disabling preserves history.
+
+run-scheduled reuses the real plan → harvest → filter → qa → package commands.
+The batch ID is saved immediately after planning. Failed/quota-limited runs retry
+that same batch on the next invocation. A schedule pauses at **awaiting_qa** until
+the existing dashboard/CLI records a complete passing review or the configured
+verdict CSV is available. It never generates automatic accept verdicts. Repeated
+cron calls while waiting for QA do not re-harvest or spend quota. Packaging then
+advances next_run_at; the next occurrence creates a new batch. A per-schedule lock
+prevents duplicate occurrences, due state is rechecked under that lock, and the
+shared web/pipeline.lock prevents simultaneous scheduled/web embedding mutations.
+
+Example crontab (adjust absolute paths and environment):
+
+```cron
+*/5 * * * * cd /srv/foundry && /srv/foundry/.venv/bin/foundry --root /srv/foundry/data run-scheduled >> /srv/foundry/data/schedules.log 2>&1
+```
+
+Cron must receive the provider secrets through its environment or a protected
+launcher. Next.js .env.local is loaded by Next.js, not automatically by cron.
+Exit 2 indicates YouTube quota exhaustion; failed schedules otherwise yield exit 1.
+An awaiting_qa or skipped schedule is not falsely reported as packaged.
+
+### Discovery, dataset detail and pricing
+
+The existing **/datasets** catalog now submits combined filters to SQLite through
+**GET /api/datasets** and retains filters in the URL. Keyword, licence, source,
+single attribute/label, inclusive image-count and USD price ranges, free-only,
+newest/largest/price sorting, and pagination are supported. Empty states explain
+that unsupported rights cannot become listings.
+
+**/datasets/[id]** adds the description/attribute, size/date/count/split, explicit
+USD price, licence links and obligations, full creator/source attribution, manifest
+SHA-256, and at most 12 explicitly QA-accepted previews. Owner price edits are
+stored in SQLite. An unavailable package has a clear reason; it cannot be priced
+or returned by the buyer API.
+
+**datasets** stores **price_cents INTEGER NOT NULL DEFAULT 0** and
+**currency TEXT NOT NULL DEFAULT 'USD'**. No price is inferred from existing data.
+Legacy Phase 2 JSON draft prices are superseded by the SQLite price field;
+re-enter an explicit price if needed.
+
+```bash
+foundry --root ./data price <dataset-id> --price-cents 4999
+foundry --root ./data price <dataset-id> --price-cents 0
+```
+
+Zero is displayed as **Free**; 4999 is **$49.99**. Packaging computes and stores
+SHA-256 of the exact **manifest.csv** in dataset.json and the SQLite registry,
+separately from per-image hashes. Verify it with **sha256sum manifest.csv**.
+Existing valid packages are registered on discovery without overwriting their
+files. Missing rights, unsupported sources, missing provenance, changed hashes,
+synthetic fixtures or inadequate QA make a record unavailable.
+
+As in Phase 2, platform_public_as_is is retained unchanged but is not a resale
+licence. YouTube/platform packages and synthetic fixtures remain in the existing
+private archive with pricing disabled, rather than becoming sale listings.
+
+### Buyer API and PLACEHOLDER checkout
+
+```bash
+foundry --root ./data api-key create --name "buyer-acme"
+foundry --root ./data api-key list
+foundry --root ./data api-key revoke <key-id>
+```
+
+Keys are shown once; api_keys stores only SHA-256 hashes and lifecycle timestamps.
+All **/api/v1/** routes require Authorization: Bearer or X-API-Key. Missing/invalid
+keys return 401, revoked/inactive keys 403, and over 60 authenticated requests in
+a fixed UTC minute returns 429 + Retry-After. Usage is persisted by key ID.
+
+- GET **/api/v1/datasets**: paginated saleable discovery with the same UI filters.
+- GET **/api/v1/datasets/[id]**: full legal metadata, price and reviewed previews.
+- GET **/api/v1/datasets/[id]/manifest**: JSON legal record including full
+  attribution, licence list, manifest SHA-256, image/source/licence records and QA.
+- POST **/api/v1/checkout**: **PLACEHOLDER**, authenticated but always 501:
+  checkout_not_implemented. No payment is processed.
+
+The Buy dataset button only opens the explicitly marked placeholder panel.
+There is no payment provider, card form, redirect or charge. Free datasets can
+download their legal JSON manifest directly from the UI. Owner exports remain
+available in the existing local workspace. Buyer keys are not dashboard auth.
+
+See **docs/BUYER_API.md** for curl examples, schema, filters, hashing and statuses.
+
+### Migrations and verification
+
+Database initialization applies additive, idempotent migrations in foundry/db.py,
+ending at PRAGMA user_version=5. Original rows/seen_urls/quota and their invariants
+are retained. New tables are image_metadata, usage_log, quota_blocks, datasets,
+schedules, schedule_log, api_keys and api_rate_limits. No existing dataset receives
+an invented price or a synthetic legal approval.
+
+```bash
+pytest -q
+pytest web/tests -q
+cd web
+npm run lint
+npm run build
+npm run test:e2e
+```
+
+New tests cover HTTP retry/backoff and sanitized failures, per-attempt quota/provider
+exhaustion, metadata rejection, verifier tokens/fail-closed verdicts, manifest
+fingerprints, combined search, pricing, hashed/revoked/rate-limited keys, schedules,
+locks, and real scheduled pause/resume at QA. Browser tests extend the prior wizard
+checks with real Next.js buyer routes, legal manifests, combined URL filters,
+price edits, reviewed previews and the no-payment placeholder.
+
+Live validation requires usable provider access. In the Phase 3 Cloud verification
+environment, Openverse returned a 403 HTML “Just a moment” access challenge, and
+YouTube/OpenAI credentials were not configured. No challenge bypass or replacement
+source was added. Provider behavior is exercised by deterministic HTTP unit tests;
+the application continues to use the real endpoints in live mode.

@@ -74,10 +74,27 @@ def read_packages():
             })
         except (ValueError, KeyError, OSError):
             continue
+    db=connection()
+    if db:
+        try:
+            tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'datasets' in tables:
+                indexed={r['id']:dict(r) for r in db.execute('SELECT id,price_cents,saleable,unavailable_reason,manifest_sha256 FROM datasets')}
+                for package in packages:
+                    if package['id'] in indexed:
+                        record=indexed[package['id']]
+                        package['price']=record['price_cents']/100
+                        package['price_cents']=record['price_cents']
+                        package['sale_cleared']=bool(record['saleable'])
+                        package['unavailable_reason']=record['unavailable_reason']
+                        package['provenance_hash']=record['manifest_sha256']
+        finally:db.close()
     return packages
 
 
 def snapshot():
+    registry = registry_db()
+    registry.close()
     db = connection()
     rows, batches, quota = [], [], []
     packages = read_packages()
@@ -126,7 +143,8 @@ def snapshot():
     embeddings = root() / "embeddings.npy"
     return {"batches": batches, "totals": totals, "sources": mix("source"), "licences": mix("licence"),
             "quota": quota, "distribution": distribution, "packages": packages,
-            "embedding_bytes": embeddings.stat().st_size if embeddings.exists() else 0}
+             "embedding_bytes": embeddings.stat().st_size if embeddings.exists() else 0,
+            "usage": usage_payload()}
 
 
 def batch_detail(batch):
@@ -180,7 +198,7 @@ def command_for(action, batch, payload):
 
 
 def redact(message):
-    for name in ("YOUTUBE_API_KEY", "OPENAI_API_KEY"):
+    for name in ("YOUTUBE_API_KEY", "OPENAI_API_KEY", "OPENVERSE_API_KEY"):
         secret = os.environ.get(name)
         if secret:
             message = message.replace(secret, "[redacted]")
@@ -265,6 +283,24 @@ def asset(payload):
                 raise ValueError("Crop not found; generate QA first")
             path = matches[0]
         mime = "image/png"
+    elif kind == "sample":
+        from foundry.marketplace import dataset_detail
+        package=identifier(payload['package']);id=identifier(payload['id'])
+        db=registry_db()
+        try:
+            detail=dataset_detail(db,package,require_saleable=True)
+            if id not in {item['id'] for item in detail['samples']}:
+                raise ValueError('Not an approved public sample')
+        finally:db.close()
+        source=root()/'packages'/package/'images'/id
+        path=root()/'web'/'samples'/package/(id+'.jpg')
+        path.parent.mkdir(parents=True,exist_ok=True)
+        if not path.exists():
+            from PIL import Image
+            with Image.open(source) as image:
+                image=image.convert('RGB');image.thumbnail((640,480))
+                image.save(path,format='JPEG',quality=85)
+        mime='image/jpeg'
     elif kind in ("manifest", "images"):
         package = identifier(payload["package"])
         if not any(p["id"] == package for p in read_packages()):
@@ -293,21 +329,18 @@ def asset(payload):
 
 
 def price(payload):
-    package = identifier(payload["package"])
-    dataset = next((p for p in read_packages() if p["id"] == package), None)
-    if not dataset or not dataset["sale_cleared"] or dataset["synthetic"]:
-        raise ValueError("Only rights-cleared, non-synthetic datasets can have a listing price")
-    amount = float(payload["price"])
-    if not 0 <= amount <= 1000000 or not amount == amount:
-        raise ValueError("Price must be between 0 and 1,000,000 USD")
-    path = root() / "web" / "prices.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.with_suffix(".lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        prices = json.loads(path.read_text()) if path.exists() else {}
-        prices[package] = round(amount, 2)
-        atomic(path, prices)
-    return {"price": prices[package]}
+    from foundry.marketplace import set_price
+    from decimal import Decimal
+    db=registry_db()
+    try:
+        cents=payload.get('price_cents')
+        if cents is None:
+            amount=Decimal(str(payload['price']))*100
+            if not amount.is_finite() or amount!=amount.to_integral_value():
+                raise ValueError('Use a price with no more than two decimal places')
+            cents=int(amount)
+        return set_price(db,identifier(payload['package']),cents)
+    finally:db.close()
 
 
 def seed():
@@ -324,6 +357,87 @@ def seed():
     return {"batch_id": batch, "synthetic": True}
 
 
+def registry_db():
+    from foundry.db import Database
+    from foundry.marketplace import sync_packages
+    root().mkdir(parents=True,exist_ok=True)
+    db=Database(root()/'foundry.sqlite3')
+    sync_packages(db,root()/'packages')
+    return db
+
+
+def usage_payload():
+    from foundry.db import Database
+    from foundry.usage import daily_usage
+    from foundry.quota import quota_status
+    root().mkdir(parents=True,exist_ok=True)
+    db=Database(root()/'foundry.sqlite3')
+    try:
+        daily=daily_usage(db)
+        for quota in db.conn.execute('SELECT source,day,units FROM quota ORDER BY day'):
+            if quota['source']!='youtube':continue
+            entry=next((r for r in daily if r['source']=='youtube' and r['day']==quota['day']),None)
+            if entry is None:
+                entry={'source':'youtube','day':quota['day'],'requests':0,'rate_limits':0,'errors':0,
+                    'retries':0,'latency_ms':0,'tokens':None,'cost_usd':None}
+                daily.append(entry)
+            blocked=db.conn.execute('SELECT 1 FROM quota_blocks WHERE source=? AND day=?',('youtube',quota['day'])).fetchone()
+            entry['quota_used']=quota['units']
+            entry['quota_remaining']=0 if blocked else max(0,10000-quota['units'])
+        return {'daily':sorted(daily,key=lambda row:(row['day'],row['source'])),'youtube':quota_status(db,'youtube')}
+    finally:db.close()
+
+
+def discovery(payload):
+    from foundry.marketplace import search_datasets
+    db=registry_db()
+    try:return search_datasets(db,payload)
+    finally:db.close()
+
+
+def dataset_payload(payload):
+    from foundry.marketplace import dataset_detail,buyer_manifest
+    db=registry_db()
+    try:
+        id=identifier(payload['id'])
+        if payload.get('manifest'):
+            detail=dataset_detail(db,id,require_saleable=True)
+            if detail['price_cents']!=0:raise ValueError('Paid checkout is not live; use the buyer API for the legal record')
+            return buyer_manifest(db,id)
+        return dataset_detail(db,id)
+    finally:db.close()
+
+
+def buyer_request(payload):
+    from foundry.db import Database
+    from foundry.buyers import authorize
+    from foundry.marketplace import sync_packages,search_datasets,dataset_detail,buyer_manifest
+    root().mkdir(parents=True,exist_ok=True)
+    db=Database(root()/'foundry.sqlite3')
+    try:
+        access=authorize(db,payload.get('token'))
+        if access['status']!=200:return access
+        headers=access['headers']
+        if payload.get('unknown'):
+            return {'status':404,'headers':headers,'body':{'error':'not_found'}}
+        if payload.get('checkout'):
+            # PLACEHOLDER: Phase 3 never processes payments or collects payment details.
+            return {'status':501,'headers':headers,'body':{'error':'checkout_not_implemented',
+                'message':'Checkout is a placeholder in Phase 3. No payment is processed.'}}
+        sync_packages(db,root()/'packages')
+        id=payload.get('id')
+        try:
+            if payload.get('manifest'):
+                body=buyer_manifest(db,identifier(id))
+                headers={**headers,'Content-Disposition':f'attachment; filename="{id}-manifest.json"'}
+            elif id:body=dataset_detail(db,identifier(id),require_saleable=True)
+            else:body=search_datasets(db,payload.get('params',{}))
+            return {'status':200,'headers':headers,'body':body}
+        except ValueError as error:
+            return {'status':404 if id else 400,'headers':headers,'body':{'error':str(error)}}
+    finally:db.close()
+
+
 if __name__ == "__main__":
     try:
         mode = sys.argv[1]
@@ -333,7 +447,9 @@ if __name__ == "__main__":
         else:
             result = {"state": snapshot, "batch": lambda: batch_detail(payload["batch"]),
                       "plan": lambda: make_plan(payload), "asset": lambda: asset(payload),
-                      "price": lambda: price(payload), "seed": seed}[mode]()
+                       "price": lambda: price(payload), "seed": seed,
+                      "usage":usage_payload,"discovery":lambda:discovery(payload),
+                      "dataset":lambda:dataset_payload(payload),"buyer":lambda:buyer_request(payload)}[mode]()
             print(json.dumps(result))
     except Exception as error:
         print(json.dumps({"error": str(error)}))

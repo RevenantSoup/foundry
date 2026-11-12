@@ -78,9 +78,9 @@ def plan(obj,prompt,refs,target,threshold,live):
 def harvest(obj,batch,video_dir,limit):
     """Harvest both adapters independently; reruns reuse global URL state."""
     plan=load_batch(obj,batch); db=obj['db']; raw=obj['root']/'raw'; raw.mkdir(exist_ok=True)
-    adapters=[OpenverseAdapter(offline=plan['offline']),
-              YouTubeAdapter(db,offline=plan['offline'],api_key=os.getenv('YOUTUBE_API_KEY'),video_dir=video_dir)]
-    count=0; failures=0
+    adapters=[OpenverseAdapter(offline=plan['offline'],db=db,batch_id=batch),
+              YouTubeAdapter(db,offline=plan['offline'],api_key=os.getenv('YOUTUBE_API_KEY'),video_dir=video_dir,batch_id=batch)]
+    count=0; failures=0;fetch_failures=0
     for adapter in adapters:
         try:
             rows=adapter.search(plan['search_terms'][0],limit or 2*plan['target'])
@@ -115,11 +115,14 @@ def harvest(obj,batch,video_dir,limit):
             except QuotaExceeded:
                 raise
             except (requests.RequestException,OSError,ValueError,KeyError,ffmpeg.Error) as error:
+                if isinstance(error,requests.RequestException):fetch_failures+=1
                 with db.conn: db.drop(row,'fetch_or_rights: '+str(error))
                 click.echo(f'{row.id}: {error}',err=True)
     if failures==len(adapters):
         raise click.ClickException('All sources failed; retry to resume')
     click.echo(f'Harvested {count}; batch total {len(db.rows(batch))}')
+    if (failures or fetch_failures) and not plan['offline']:
+        raise click.ClickException(f'{failures} source search failures; {fetch_failures} download failures after retries. Other results saved. Retry batch {batch} to resume')
 
 @cli.command(name='filter')
 @click.option('--batch',required=True)
@@ -132,7 +135,7 @@ def filter_command(obj,batch,verifier):
     if verifier=='openai':
         key=os.getenv('OPENAI_API_KEY')
         if not key: raise click.ClickException('OPENAI_API_KEY is required')
-        engine=OpenAIVerifier(key)
+        engine=OpenAIVerifier(key,db=obj['db'],batch_id=batch)
     try:
         count=filter_batch(obj['db'],batch,plan,obj['root']/'raw',
                            Embedder('stub' if plan['offline'] else 'clip'),engine,obj['root'])
@@ -180,6 +183,96 @@ def package_command(obj,batch):
     except (ValueError,OSError) as error:
         raise click.ClickException(str(error)) from error
     click.echo(path)
+
+
+@cli.command(name='price')
+@click.argument('dataset_id')
+@click.option('--price-cents',required=True,type=click.IntRange(min=0,max=100000000))
+@click.pass_obj
+def price_command(obj,dataset_id,price_cents):
+    """Set an explicit USD listing price for a saleable dataset."""
+    from .marketplace import sync_packages,set_price
+    try:
+        sync_packages(obj['db'],obj['root']/'packages')
+        result=set_price(obj['db'],dataset_id,price_cents)
+        click.echo(f"{dataset_id}: USD {result['price']:.2f}")
+    except (ValueError,OSError) as error:
+        raise click.ClickException(str(error)) from error
+
+@cli.group(name='api-key')
+def api_key():
+    """Create, list and revoke hashed read-only buyer API keys."""
+
+@api_key.command(name='create')
+@click.option('--name',required=True)
+@click.pass_obj
+def api_key_create(obj,name):
+    from .buyers import create_key
+    try:
+        id,key=create_key(obj['db'],name)
+        click.echo(f'id={id}')
+        click.echo('Save this key now. It is shown once and cannot be recovered.',err=True)
+        click.echo(key)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+
+@api_key.command(name='list')
+@click.pass_obj
+def api_key_list(obj):
+    records=[dict(row) for row in obj['db'].conn.execute(
+        'SELECT id,name,created_at,last_used_at,revoked_at,is_active FROM api_keys ORDER BY created_at')]
+    click.echo(json.dumps(records,indent=2))
+
+@api_key.command(name='revoke')
+@click.argument('key_id')
+@click.pass_obj
+def api_key_revoke(obj,key_id):
+    from .buyers import revoke_key
+    try:
+        revoke_key(obj['db'],key_id);click.echo(f'Revoked {key_id}')
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+
+@cli.group(name='schedule')
+def schedule():
+    """Manage explicit UTC recurring pipeline specifications."""
+
+@schedule.command(name='add')
+@click.option('--spec',required=True,type=click.Path(exists=True,dir_okay=False,path_type=Path))
+@click.option('--interval',required=True,type=click.Choice(['daily','weekly']))
+@click.option('--time','run_time',required=True,help='UTC HH:MM')
+@click.pass_obj
+def schedule_add(obj,spec,interval,run_time):
+    from .scheduling import add_schedule
+    try:
+        click.echo(add_schedule(obj['db'],spec,interval,run_time))
+    except (ValueError,OSError) as error:
+        raise click.ClickException(str(error)) from error
+
+@schedule.command(name='list')
+@click.pass_obj
+def schedule_list(obj):
+    click.echo(json.dumps([dict(row) for row in obj['db'].conn.execute('SELECT * FROM schedules ORDER BY next_run_at')],indent=2))
+
+@schedule.command(name='remove')
+@click.argument('schedule_id')
+@click.pass_obj
+def schedule_remove(obj,schedule_id):
+    with obj['db'].conn:
+        cursor=obj['db'].conn.execute('UPDATE schedules SET enabled=0 WHERE id=?',(schedule_id,))
+    if not cursor.rowcount:raise click.ClickException('Unknown schedule')
+    click.echo(f'Disabled {schedule_id}')
+
+@cli.command(name='run-scheduled')
+@click.pass_obj
+def run_scheduled(obj):
+    """Run due schedules once. Safe for cron; pause until real QA is submitted."""
+    from .scheduling import run_due
+    result=run_due(obj['db'],obj['root'])
+    click.echo(json.dumps(result,indent=2))
+    if any(record['status']=='failed' for record in result):
+        raise click.ClickException('One or more schedules failed; progress saved for retry')
+
 
 if __name__=='__main__':
     cli()
