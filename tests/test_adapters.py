@@ -36,3 +36,17 @@ def test_short_video_has_no_untrimmed_frames(tmp_path):
     subprocess.run(['ffmpeg','-loglevel','error','-f','lavfi','-i',
                     'color=red:s=64x64:d=3','-y',str(tmp_path/'v.mp4')],check=True)
     assert extract_frames(tmp_path/'v.mp4',tmp_path/'frames') == []
+
+def test_scene_changes_trimmed_and_capped(tmp_path):
+    import subprocess
+    sequence=tmp_path/'sequence'; sequence.mkdir()
+    for i in range(100):
+        Image.new('RGB',(64,64),'white' if i%2 else 'black').save(sequence/f'{i:03d}.png')
+    video=tmp_path/'v.mp4'
+    subprocess.run(['ffmpeg','-loglevel','error','-framerate','2','-i',
+                    str(sequence/'%03d.png'),'-r','25','-c:v','libx264','-pix_fmt','yuv420p',
+                    '-y',str(video)],check=True)
+    frames=extract_frames(video,tmp_path/'frames')
+    assert len(frames)==40
+    assert all(2000 <= ts < 48000 for _,ts in frames)
+    assert [ts for _,ts in frames]==sorted(ts for _,ts in frames)

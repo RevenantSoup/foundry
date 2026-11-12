@@ -70,7 +70,9 @@ foundry package --batch "$BATCH"
 
 QA requires exactly 200 distinct accepted images. Below 0.90 precision it prints
 every failing ID and exits 1; packaging also rechecks the review. Missing or
-incomplete reviews block packaging. QA samples the exact highest scoring target
+incomplete reviews block packaging. Reviews are bound to SHA-256 snapshots of the sampled image bytes. Changed or
+missing reviewed files block packaging and require a new batch.
+QA samples the exact highest scoring target
 images eligible for the package; every sample must be reviewed.
 
 For a completely automatic **synthetic pipeline demonstration only**:
@@ -89,7 +91,7 @@ manifest.csv, dataset.json, and images/<id>. The manifest has all specified Row
 columns populated. For still images, frame_ts_ms is 0; unsampled QA verdicts are
 not_sampled. Rows are deterministically split 90% train / 10% validation.
 Provenance hashes bind image bytes to record metadata. Identical reruns reuse the
-same version; version changes do not overwrite earlier packages.
+same version; earlier packages are never overwritten.
 
 ## Commands and configuration
 
@@ -123,7 +125,10 @@ Rerun commands with the same batch ID to resume. Seen URLs and pHashes are globa
 across batches. pHash Hamming distance <=10 or cosine >0.95 causes a duplicate drop.
 Dropped URLs remain globally seen. A new plan intentionally creates a new batch;
 to retry failed sources use the original batch. Do not change a batch's plan or
-embedding backend after filtering. Keep reference files available until filtering.
+embedding backend after filtering. Backend/model identity is stored globally;
+use a separate --root for synthetic and CLIP datasets. Legacy embeddings without
+an identity are refused rather than compared in an unknown vector space.
+Keep reference files available until filtering.
 SQLite is the authoritative plan/state; plan JSON is the reviewable artifact.
 
 ## Live integrations
@@ -172,6 +177,6 @@ python -m foundry.cli --help
 ```
 
 Tests cover rights rejection, pHash re-encoding, cross-batch dedupe/drop logs,
-cosine dedupe, quota transactions and CLI exit 2, trimmed video, normalized
+cosine dedupe, quota transactions and CLI exit 2, trimmed scene extraction capped at 40 frames, normalized
 embeddings, shortlist-only verification, resumability, QA boundaries, incomplete
 reviews, manifest completeness, versioning, source isolation and all CLI helps.
