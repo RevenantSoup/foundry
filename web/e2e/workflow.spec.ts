@@ -1,6 +1,12 @@
 import {test,expect} from "@playwright/test";
 import {Buffer} from "node:buffer";
 
+test.beforeEach(async({page,request})=>{
+ const credentials={user:process.env.FOUNDRY_ADMIN_USER,password:process.env.FOUNDRY_ADMIN_PASSWORD};
+ await request.post("/api/auth/login",{data:credentials});
+ await page.request.post("/api/auth/login",{data:credentials});
+ await page.addInitScript(()=>localStorage.setItem("foundry-tour-v1-dismissed","true"));
+});
 test("real CLI wizard, failing QA gate, package downloads and responsive pages",async({page,request})=>{
  const errors:string[]=[];
  page.on("pageerror",error=>errors.push(error.message));

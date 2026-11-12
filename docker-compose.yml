@@ -1,0 +1,50 @@
+services:
+  web:
+    image: foundry-web
+    build:
+      context: .
+      target: web
+      cache_from: [foundry-cli, foundry-web]
+      cache_to: [type=inline]
+      args:
+        APP_VERSION: ${APP_VERSION:-0.1.0}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+    ports:
+      - "3000:3000"
+    environment:
+      FOUNDRY_ROOT: /data
+      FOUNDRY_PYTHON: /usr/local/bin/python
+      FOUNDRY_ADMIN_USER: ${FOUNDRY_ADMIN_USER:?Set FOUNDRY_ADMIN_USER}
+      FOUNDRY_ADMIN_PASSWORD: ${FOUNDRY_ADMIN_PASSWORD:?Set FOUNDRY_ADMIN_PASSWORD}
+      FOUNDRY_SESSION_SECRET: ${FOUNDRY_SESSION_SECRET:?Set FOUNDRY_SESSION_SECRET}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      OPENVERSE_API_KEY: ${OPENVERSE_API_KEY:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      FOUNDRY_LOG_FILE: /data/logs/cli.jsonl
+    volumes:
+      - foundry-data:/data
+    restart: unless-stopped
+  cli-worker:
+    image: foundry-cli
+    build:
+      context: .
+      target: cli
+      cache_from: [foundry-cli]
+      cache_to: [type=inline]
+    command: ["foundry-worker"]
+    environment:
+      FOUNDRY_ROOT: /data
+      FOUNDRY_SCHEDULE_POLL_SECONDS: ${FOUNDRY_SCHEDULE_POLL_SECONDS:-300}
+      FOUNDRY_LOG_FILE: /data/logs/cli.jsonl
+      OPENVERSE_API_KEY: ${OPENVERSE_API_KEY:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    volumes:
+      - foundry-data:/data
+    restart: unless-stopped
+volumes:
+  foundry-data:

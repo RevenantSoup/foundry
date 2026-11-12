@@ -1,0 +1,65 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install Python dependencies
+        run: |
+          pip install 'torch==2.9.1+cpu' --index-url https://download.pytorch.org/whl/cpu
+          pip install -e '.[test]'
+      - name: CLI and bridge tests
+        run: |
+          pytest -q
+          pytest web/tests -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Web checks
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Browser regressions — login, marketplace, wizard and mobile
+        working-directory: web
+        run: |
+          npx playwright install --with-deps chromium
+          FOUNDRY_PYTHON="$(command -v python)" npm run test:e2e
+      - name: Docker build — CLI
+        run: docker build --target cli -t foundry-cli .
+      - name: Docker build — web
+        run: docker build --build-arg APP_VERSION=${GITHUB_SHA} -t foundry-web .
+      - name: Compose and complete local launch smoke
+        run: |
+          mkdir -p work
+          python - <<'PYCODE'
+          from pathlib import Path
+          import secrets,os
+          path=Path('work/ci.env')
+          path.write_text('FOUNDRY_ADMIN_USER=ci-admin\nFOUNDRY_ADMIN_PASSWORD='+secrets.token_hex(24)+'\nFOUNDRY_SESSION_SECRET='+secrets.token_hex(32)+'\n')
+          os.chmod(path,0o600)
+          PYCODE
+          docker compose --env-file work/ci.env up --build --wait --wait-timeout 180
+          docker compose --env-file work/ci.env run --rm cli-worker python /app/scripts/seed-demo.py --root /data
+          bash scripts/smoke-test.sh
+      - name: Stop verification stack
+        if: always()
+        run: |
+          if [ -f work/ci.env ]; then docker compose --env-file work/ci.env down -v; fi

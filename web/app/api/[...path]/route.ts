@@ -1,3 +1,5 @@
+import {apiError} from "@/lib/responses";
+import {reportError} from "@/lib/logger";
 import {NextRequest,NextResponse} from "next/server";
 import {promises as fs} from "node:fs";
 import {createReadStream} from "node:fs";
@@ -9,7 +11,7 @@ import {bridge,dataRoot,startJob,jobStatus,validId} from "@/lib/server";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 type Context={params:Promise<{path:string[]}>};
-function errorResponse(error:unknown) {return NextResponse.json({error:error instanceof Error?error.message:"Request failed"},{status:400})}
+function errorResponse(error:unknown) {void reportError(error);return apiError("request_failed",error instanceof Error?error.message:"Request failed",400)}
 export async function GET(request:NextRequest,context:Context) {
  try {
   const parts=(await context.params).path;
@@ -17,13 +19,14 @@ export async function GET(request:NextRequest,context:Context) {
   if(parts[0]==="batches"&&parts[1])return NextResponse.json(await bridge("batch",{batch:validId(parts[1])}));
   if(parts[0]==="jobs"&&parts[1])return NextResponse.json(await jobStatus(parts[1]));
   if(parts[0]==="asset"){
+    if(request.nextUrl.searchParams.getAll("kind").length!==1)throw new Error("Specify exactly one asset kind");
     const payload=Object.fromEntries(request.nextUrl.searchParams.entries());
     const asset=await bridge<{path:string;mime:string;filename:string}>("asset",payload);
     const stat=await fs.stat(asset.path);
     const stream=Readable.toWeb(createReadStream(asset.path)) as ReadableStream<Uint8Array>;
     return new Response(stream,{headers:{"Content-Type":asset.mime,"Content-Length":String(stat.size),"Content-Disposition":(asset.mime.startsWith("image/")?"inline":"attachment")+'; filename="'+asset.filename+'"',"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff"}});
   }
-  return NextResponse.json({error:"Not found"},{status:404});
+  return apiError("not_found","API route not found.",404);
  }catch(error){return errorResponse(error)}
 }
 export async function POST(request:NextRequest,context:Context) {
@@ -49,6 +52,6 @@ export async function POST(request:NextRequest,context:Context) {
     return NextResponse.json(await startJob(parts[1],body.action,body));
   }
   if(parts[0]==="price")return NextResponse.json(await bridge("price",await request.json()));
-  return NextResponse.json({error:"Not found"},{status:404});
+  return apiError("not_found","API route not found.",404);
  }catch(error){return errorResponse(error)}
 }

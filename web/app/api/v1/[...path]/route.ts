@@ -13,8 +13,10 @@ async function dispatch(request:NextRequest,context:Context,post=false){
   const datasets=!post&&parts[0]==="datasets"&&(parts.length<=2||(parts.length===3&&parts[2]==="manifest"));
   const result=await bridge<Result>("buyer",{token,checkout,unknown:!checkout&&!datasets,
     id:datasets?parts[1]:undefined,manifest:parts[2]==="manifest",params:Object.fromEntries(request.nextUrl.searchParams)});
-  return NextResponse.json(result.body,{status:result.status,headers:result.headers});
- }catch{return NextResponse.json({error:"buyer_api_unavailable"},{status:503})}
+  const body=result.body as Record<string,unknown>;
+  if(result.status>=400&&body.error&&!body.message)body.message=String(body.error).replaceAll("_"," ");
+  return NextResponse.json(body,{status:result.status,headers:result.headers});
+ }catch{return NextResponse.json({error:"buyer_api_unavailable",message:"The buyer API is temporarily unavailable."},{status:503})}
 }
 export const GET=(request:NextRequest,context:Context)=>dispatch(request,context);
 export const POST=(request:NextRequest,context:Context)=>dispatch(request,context,true);

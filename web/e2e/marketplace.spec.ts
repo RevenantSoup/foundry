@@ -28,6 +28,8 @@ test("keyed buyer routes, legal manifest, rate limit and checkout placeholder",a
  expect(limited.status()).toBe(429);expect(Number(limited.headers()["retry-after"])).toBeGreaterThan(0);
 });
 test("combined URL filters, detail attribution, reviewed samples and USD pricing",async({page,request})=>{
+ await page.request.post("/api/auth/login",{data:{user:process.env.FOUNDRY_ADMIN_USER,password:process.env.FOUNDRY_ADMIN_PASSWORD}});
+ await page.addInitScript(()=>localStorage.setItem("foundry-tour-v1-dismissed","true"));
  const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));
  await page.goto("/datasets");
  await page.getByLabel("Keyword",{exact:true}).fill(fixture.prompt);

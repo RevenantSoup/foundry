@@ -5,13 +5,13 @@ import path from "node:path";
 import {randomUUID} from "node:crypto";
 import type {Job} from "./types";
 
-export const repo = path.resolve(process.cwd(), "..");
+export const repo = path.resolve(/* turbopackIgnore: true */ process.env.FOUNDRY_REPO || path.join(process.cwd(), ".."));
 const configured = path.resolve(/* turbopackIgnore: true */ process.env.FOUNDRY_ROOT || path.join(repo,"data"));
 export const dataRoot = existsSync(path.join(configured,"pyproject.toml")) ? path.join(configured,"data") : configured;
 export const python = process.env.FOUNDRY_PYTHON || (existsSync(path.join(repo,".venv/bin/python")) ? path.join(repo,".venv/bin/python") : "python3");
 const bridgePath = path.join(repo,"web/bridge.py");
 export function validId(id:string) {if(!/^[a-zA-Z0-9_-]{1,100}$/.test(id)) throw new Error("Invalid identifier");return id;}
-const env = () => ({...process.env,FOUNDRY_ROOT:dataRoot,PYTHONPATH:repo});
+const env = () => ({...process.env,FOUNDRY_ROOT:dataRoot,PYTHONPATH:[repo,process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)});
 export async function bridge<T>(mode:string,body:object={}):Promise<T> {
   return new Promise((resolve,reject)=>{
     const child=spawn(python,[bridgePath,mode],{cwd:repo,env:env(),stdio:["pipe","pipe","pipe"]});

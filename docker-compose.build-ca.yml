@@ -1,0 +1,11 @@
+# Optional build-only trusted CA for managed/proxied environments; never disables TLS.
+services:
+  web:
+    build:
+      secrets: [proxy_ca]
+  cli-worker:
+    build:
+      secrets: [proxy_ca]
+secrets:
+  proxy_ca:
+    file: ${FOUNDRY_DOCKER_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}

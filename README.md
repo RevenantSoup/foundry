@@ -202,8 +202,8 @@ npm run dev
 ```
 
 Open **http://localhost:3000**. The server can also be reached on the development
-environment's forwarded port. No authentication or payment collection is included;
-run it in your trusted local environment.
+environment's forwarded port. Phase 4 adds a single-admin login for owner workflows; the marketplace remains
+public and checkout remains a no-payment placeholder. See Local admin setup below.
 
 For a production build on the same machine with the Python environment available:
 
@@ -223,9 +223,9 @@ npm run seed
 The seed command generates six references, then runs the real CLI's offline plan,
 harvest, filter, QA and package commands. It explicitly uses synthetic QA verdicts;
 its results are fixtures, not evidence of model performance or sellable datasets.
-Each invocation creates a unique fixture specification so global deduplication
-does not empty subsequent demonstrations. Empty workspaces also render normally
-without seeding.
+The seed is idempotent: repeated calls reuse the same two labeled datasets. Each
+keeps the required 200-image QA sample; the production quality gate is unchanged.
+Empty workspaces also render normally without seeding.
 
 ### Configuration
 
@@ -273,8 +273,9 @@ documented in the CLI section above.
   containing **platform_public_as_is** stay in a separate private archive with
   pricing disabled. That platform label is not permission to resell.
   CC-BY credit/change notices and CC-BY-SA ShareAlike requirements are visible.
-  Prices are editable listing drafts; no checkout, public listing, or automatic
-  legal clearance service is implemented.
+  Prices are editable listing drafts. Rights-cleared packages appear in the public
+  marketplace; checkout remains a no-payment placeholder. Legal clearance is
+  still the operator's responsibility.
 - **Analytics /analytics**: yield and precision across batches, CLIP score
   distribution, source/licence mix, and quota usage over time. Synthetic batches
   are included and clearly identified elsewhere in the workspace.
@@ -524,3 +525,193 @@ environment, Openverse returned a 403 HTML “Just a moment” access challenge,
 YouTube/OpenAI credentials were not configured. No challenge bypass or replacement
 source was added. Provider behavior is exercised by deterministic HTTP unit tests;
 the application continues to use the real endpoints in live mode.
+
+## Phase 4 — Production hardening and launch readiness
+
+[![CI](https://github.com/RevenantSoup/foundry/actions/workflows/ci.yml/badge.svg)](https://github.com/RevenantSoup/foundry/actions/workflows/ci.yml)
+
+Phase 4 hardens the existing app; it does not add sources, training or payments.
+The CLI stays login-free. The public catalog/detail pages stay public. A single
+admin login now protects owner workflows and internal APIs, while /api/v1/*
+continues to use the existing hashed buyer API keys.
+
+### Local admin setup
+
+Copy web/.env.example to the ignored web/.env.local and set:
+
+- FOUNDRY_ADMIN_USER
+- FOUNDRY_ADMIN_PASSWORD: unique, at least 12 characters
+- FOUNDRY_SESSION_SECRET: at least 32 random characters (e.g. openssl rand -hex 32)
+- NEXT_PUBLIC_SITE_URL: local origin for development, final HTTPS origin before
+  a production build
+
+Placeholder credentials are rejected. Run npm install and npm run dev in web/,
+then visit /login. The existing dashboard URL remains /; /dashboard is a protected
+alias. /new, /batches (including QA), /qa, /analytics, owner asset exports, jobs,
+state, usage and price mutations require an admin session. /datasets and
+/datasets/[id] remain public; owner controls are hidden without a session.
+?admin=1 explicitly requests the protected catalog/detail admin view.
+
+Auth uses signed httpOnly, SameSite=Lax, eight-hour cookies, Secure in production.
+Password/session-secret changes invalidate old cookies; recreate the web process
+after editing environment values. Sign out clears the browser cookie. There are
+no multi-user accounts, roles, resets or OAuth. CLI commands still need no login;
+an admin cookie never substitutes for a buyer key.
+
+### Docker / Compose quickstart
+
+A single root multi-stage Dockerfile builds Python 3.11 + ffmpeg + CPU inference
+dependencies and a Node 22 Next.js standalone web runner. Both final targets are
+non-root; dependencies come from pyproject.toml and web/package-lock.json. Models
+are not downloaded during image builds. Test/dev data, .env, .git, SQLite files,
+node_modules and .next are excluded by .dockerignore. On first startup the
+non-root entrypoint unpacks the trusted CPU SDK once into the shared data volume;
+allow extra startup time and disk space. See the deployment guide for cache and
+model-storage details.
+
+```bash
+docker build --target cli -t foundry-cli .
+docker build --build-arg APP_VERSION="$(git rev-parse HEAD)" \
+  --build-arg NEXT_PUBLIC_SITE_URL=https://your-real-domain.example \
+  -t foundry-web .
+docker run --rm foundry-cli --help
+```
+
+For local full-stack use, copy .env.example to ignored .env, set unique admin
+credentials and the session secret, then:
+
+```bash
+docker compose --env-file .env up --build -d
+docker compose ps
+docker compose logs -f web cli-worker
+docker compose run --rm cli-worker foundry --help
+docker compose run --rm cli-worker python /app/scripts/seed-demo.py --root /data
+# Open http://localhost:3000/datasets or /login
+docker compose down
+```
+
+Both services mount **foundry-data:/data**. The database is
+**/data/foundry.sqlite3**. FOUNDRY_ROOT remains the only data-path setting;
+DATABASE_PATH is not a separate configuration. The cli-worker wrapper executes
+explicit commands when supplied; otherwise it runs run-scheduled every 300
+seconds (FOUNDRY_SCHEDULE_POLL_SECONDS). Schedules remain UTC and pause for real QA.
+
+Compose passes NEXT_PUBLIC_SITE_URL to both build and runtime. Rebuild if the
+canonical origin changes; changing a runtime public variable cannot rewrite
+statically rendered HTML.
+
+Managed HTTPS proxies can supply a trusted build CA without disabling TLS:
+
+```bash
+FOUNDRY_DOCKER_CA_FILE=/etc/ssl/certs/ca-certificates.crt \
+  docker build --secret id=proxy_ca,src=/etc/ssl/certs/ca-certificates.crt -t foundry-web .
+docker compose --env-file .env -f docker-compose.yml \
+  -f docker-compose.build-ca.yml up --build -d
+```
+
+Normal hosts/CI use the ordinary commands without the optional CA override.
+Do not use down -v on a real dataset volume without an intentional backup plan.
+
+### Constrained-disk verification
+
+Use the normal build/Compose commands above on a host with at least 20 GB free.
+For small disks, the optional `docker-compose.low-disk.yml` keeps the reproducible
+SDK cache in executable tmpfs (up to 2 GB RAM per service; use at least 8 GB RAM).
+SQLite and dataset bytes still persist in the shared named volume. Build the
+images first, then start with `--no-build` and the low-disk override.
+
+The following staged cache commands were used for the managed vfs workspace.
+Add the trusted `--secret id=proxy_ca,src=/etc/ssl/certs/ca-certificates.crt` flag
+to builds when the managed proxy requires it. Pruning here removes disposable
+build cache, not datasets or volumes.
+
+```bash
+docker build --build-arg BUILDKIT_INLINE_CACHE=1 --target cli -t foundry-cli .
+docker build --build-arg BUILDKIT_INLINE_CACHE=1 --target web-assets -t foundry-assets .
+docker builder prune -af
+docker build --build-arg BUILDKIT_INLINE_CACHE=1 --cache-from foundry-cli \
+  --cache-from foundry-assets -t foundry-web .
+# Retain foundry-assets if running smoke-test.sh next: it reuses that optional cache.
+# Otherwise release it and its disposable cache before starting the small-disk stack:
+docker image rm foundry-assets
+docker builder prune -af
+docker compose --env-file .env -f docker-compose.yml \
+  -f docker-compose.low-disk.yml up --no-build -d
+```
+
+CI verifies the default persistent-cache `docker compose up --build --wait`
+arrangement and then runs the complete smoke script on a normal runner.
+
+### Demo and guided tour
+
+```bash
+python scripts/seed-demo.py
+# Optional isolated data directory:
+python scripts/seed-demo.py --root ./data-demo
+# web/npm run seed delegates to the same idempotent implementation.
+```
+
+Two DEMO · synthetic fixture packages are created through the real offline CLI,
+using project-generated synthetic references/media and explicit fixture QA only.
+They remain unavailable for sale and excluded from the buyer API. Existing licence,
+attribution, dedupe and 200-sample / 0.90 rules are not relaxed: each demo contains
+200 images, rather than pretending 20 images could satisfy the mandatory sample.
+Rerunning reuses the same batches/packages. Do not seed into a live CLIP root.
+
+Public visitors can inspect these labeled demo records; owner controls remain
+protected. The first authenticated visit offers a non-blocking guided tour of
+Overview → New Dataset → Batch → QA → Marketplace. It starts only when requested,
+can be skipped/closed at every step, and remembers dismissal in localStorage.
+The Tour button allows an explicit restart.
+
+### Operational hooks, metadata and accessibility
+
+- foundry --version and --help are supported. CLI errors/warnings emit timestamped,
+  redacted JSON to stderr, optionally FOUNDRY_LOG_FILE. QA keeps exit 1 and YouTube
+  quota keeps exit 2. Help/version preserve successful exits.
+- GET /api/health returns status, db and version; DB failure is HTTP 503. Internal
+  API errors consistently include error + message. Buyer error codes/contracts
+  and the checkout 501 placeholder remain intact.
+- Logging is centralized in foundry/logging.py and web/lib/logger.ts. Optional
+  SENTRY_DSN activates server hooks; unset works without any monitoring vendor.
+  Docker includes the Python optional SDK; source installs can use
+  pip install -e '.[monitor]'. Request bodies, cookies and auth headers are not
+  collected by the hook. No real monitoring delivery was assumed verified.
+- Global error/not-found/loading boundaries and skeletons improve failure and
+  loading states. CLI jobs remain background jobs with real status/counts.
+- Existing public samples and private QA crops use next/image where practical.
+  Private crop requests are unoptimized so browser session cookies reach the
+  protected route; they are not sent through an unauthenticated image optimizer.
+- Visible focus/skip navigation, field labels, keyboard-native filters/dialogs,
+  semantic headings, alt text, icon labels, readable quiet text and 44px mobile
+  controls are checked in the launch checklist.
+- The title template is %s | Foundry. Public dataset metadata is derived from real
+  dataset records, unavailable/demo records use noindex, and canonical/OG/Twitter,
+  robots.txt, sitemap.xml and the app/social icons are supplied without fake claims.
+
+### CI, smoke checks and release gates
+
+.github/workflows/ci.yml runs Python 3.11 tests, bridge tests, Node 22 npm ci/lint/
+build, browser regressions, and both Docker builds on main pushes and pull requests. Pip/npm caches are
+enabled. Builds do not publish images or need provider/admin secrets.
+Check the linked Actions run for the actual remote result; a valid YAML file alone
+is not evidence of a green run.
+
+```bash
+pytest -q
+pytest web/tests -q
+cd web && npm run lint && npm run build && cd ..
+# Requires a running local/production-like stack with a demo or licensed dataset:
+bash scripts/smoke-test.sh
+```
+
+smoke-test.sh fails fast with named PASS/FAIL checks for pytest, Next build, both
+Docker builds, health/DB, public catalog/detail and unauthenticated buyer API 401.
+Set FOUNDRY_SMOKE_URL to another origin, SMOKE_PYTHON to a host interpreter, or
+FOUNDRY_DOCKER_CA_FILE for a managed build proxy. It never starts payments.
+
+See **docs/DEPLOYMENT.md** for the supported persistent-host arrangement, explicit
+Vercel limitations/preparation, auth rotation, backups, rollback and monitoring.
+See **LAUNCH_CHECKLIST.md** for honestly checked local evidence and outstanding
+operator work. Vercel remote transport, real provider access, public TLS/domain,
+production load/restore drills and actual payment processing are not claimed done.

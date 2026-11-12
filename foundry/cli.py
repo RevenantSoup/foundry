@@ -11,6 +11,7 @@ import imagehash
 from PIL import Image
 import requests
 import ffmpeg
+from .logging import event,redact
 from .db import Database
 from .adapters.openverse import OpenverseAdapter
 from .adapters.youtube import YouTubeAdapter
@@ -20,7 +21,24 @@ from .cascade.verify import StubVerifier, OpenAIVerifier
 from .qa import create_sheet, read_verdicts
 from .package import package_batch
 
-@click.group()
+class OperationalGroup(click.Group):
+    def invoke(self,ctx):
+        original_args=list(ctx.args)
+        batch=original_args[original_args.index('--batch')+1] if '--batch' in original_args and original_args.index('--batch')+1<len(original_args) else ''
+        try:return super().invoke(ctx)
+        except click.ClickException as error:
+            error.message=redact(error.message)
+            event('error',ctx.invoked_subcommand or 'foundry',batch,error.message,exit_code=error.exit_code)
+            raise
+        except click.exceptions.Exit:
+            raise
+        except Exception as error:
+            message=redact(str(error))
+            event('error',ctx.invoked_subcommand or 'foundry',batch,message,exit_code=1)
+            raise click.ClickException(message) from None
+
+@click.group(cls=OperationalGroup)
+@click.version_option(version='0.1.0',prog_name='foundry')
 @click.option('--root',type=click.Path(path_type=Path),default='data',show_default=True)
 @click.pass_context
 def cli(ctx,root):
@@ -88,7 +106,7 @@ def harvest(obj,batch,video_dir,limit):
             raise
         except (requests.RequestException,OSError,ValueError,KeyError,ffmpeg.Error) as error:
             failures+=1
-            click.echo(f'{type(adapter).__name__}: {error}',err=True)
+            event('warning','harvest',batch,f'{type(adapter).__name__}: {error}')
             continue
         for row in rows:
             row.batch_id=batch
@@ -117,7 +135,7 @@ def harvest(obj,batch,video_dir,limit):
             except (requests.RequestException,OSError,ValueError,KeyError,ffmpeg.Error) as error:
                 if isinstance(error,requests.RequestException):fetch_failures+=1
                 with db.conn: db.drop(row,'fetch_or_rights: '+str(error))
-                click.echo(f'{row.id}: {error}',err=True)
+                event('warning','harvest',batch,f'{row.id}: {error}')
     if failures==len(adapters):
         raise click.ClickException('All sources failed; retry to resume')
     click.echo(f'Harvested {count}; batch total {len(db.rows(batch))}')

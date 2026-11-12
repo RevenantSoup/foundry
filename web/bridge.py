@@ -221,7 +221,7 @@ def run_job(job_id):
         atomic(path, job)
         try:
             command = command_for(job["action"], job["batch"], job.get("payload", {}))
-            env = dict(os.environ, PYTHONPATH=str(REPO), PYTHONUNBUFFERED="1")
+            env = dict(os.environ, PYTHONPATH=str(REPO)+os.pathsep+os.environ.get("PYTHONPATH",""), PYTHONUNBUFFERED="1")
             with subprocess.Popen(command, cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as process:
                 for line in process.stdout:
                     job["log"] = (job["log"] + redact(line))[-100000:]
@@ -344,17 +344,8 @@ def price(payload):
 
 
 def seed():
-    from PIL import Image
-    directory = root() / "web" / "refs" / uuid.uuid4().hex
-    directory.mkdir(parents=True, exist_ok=True)
-    for i in range(6):
-        Image.new("RGB", (128, 128), (i * 40, 80, 120)).save(directory / f"{i}.png")
-    batch = make_plan({"upload": directory.name, "prompt": "Synthetic fixture demo " + uuid.uuid4().hex[:6]})["id"]
-    for action in ("harvest", "filter", "qa"):
-        subprocess.run(command_for(action, batch, {}), cwd=REPO, check=True, stdout=sys.stderr)
-    subprocess.run(cli_base() + ["qa", "--batch", batch, "--stub-verdicts", "accept"], cwd=REPO, check=True, stdout=sys.stderr)
-    subprocess.run(command_for("package", batch, {}), cwd=REPO, check=True, stdout=sys.stderr)
-    return {"batch_id": batch, "synthetic": True}
+    from foundry.seed import seed_demo
+    return seed_demo(root())
 
 
 def registry_db():
@@ -438,6 +429,39 @@ def buyer_request(payload):
     finally:db.close()
 
 
+def health_payload():
+    from foundry.db import Database
+    root().mkdir(parents=True,exist_ok=True)
+    db=Database(root()/'foundry.sqlite3')
+    try:
+        check=db.conn.execute('PRAGMA quick_check').fetchone()[0]
+        if check!='ok':raise ValueError('Database integrity check failed')
+        return {'db':'ok'}
+    finally:db.close()
+
+
+def demo_payload():
+    from foundry.marketplace import search_datasets
+    db=registry_db()
+    try:
+        result=search_datasets(db,{'q':'DEMO · ','limit':100},include_unavailable=True)
+        result['items']=[item for item in result['items'] if item['synthetic']]
+        result['total']=len(result['items'])
+        return result
+    finally:db.close()
+
+
+def seo_payload(payload):
+    db=registry_db()
+    try:
+        if payload.get('id'):
+            row=db.conn.execute('SELECT name,description,saleable FROM datasets WHERE id=?',(identifier(payload['id']),)).fetchone()
+            if not row:raise ValueError('Dataset not found')
+            return {**dict(row),'saleable':bool(row['saleable'])}
+        return [dict(row) for row in db.conn.execute('SELECT id,created_at FROM datasets WHERE saleable=1 ORDER BY created_at DESC')]
+    finally:db.close()
+
+
 if __name__ == "__main__":
     try:
         mode = sys.argv[1]
@@ -448,7 +472,7 @@ if __name__ == "__main__":
             result = {"state": snapshot, "batch": lambda: batch_detail(payload["batch"]),
                       "plan": lambda: make_plan(payload), "asset": lambda: asset(payload),
                        "price": lambda: price(payload), "seed": seed,
-                      "usage":usage_payload,"discovery":lambda:discovery(payload),
+                      "seo":lambda:seo_payload(payload),"health":health_payload,"demo":demo_payload,"usage":usage_payload,"discovery":lambda:discovery(payload),
                       "dataset":lambda:dataset_payload(payload),"buyer":lambda:buyer_request(payload)}[mode]()
             print(json.dumps(result))
     except Exception as error:

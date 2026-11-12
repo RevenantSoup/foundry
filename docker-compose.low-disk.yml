@@ -1,0 +1,9 @@
+# Optional: keep reproducible SDK caches in RAM on hosts with >=8 GB RAM.
+# SQLite, images and manifests still persist in the shared named volume.
+services:
+  web:
+    tmpfs:
+      - /data/.runtime:uid=10001,gid=10001,mode=0700,size=2g,exec
+  cli-worker:
+    tmpfs:
+      - /data/.runtime:uid=10001,gid=10001,mode=0700,size=2g,exec
