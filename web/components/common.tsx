@@ -7,7 +7,7 @@ import {Card,CardContent,CardHeader,CardTitle,CardDescription} from "@/component
 import type {Batch,Job} from "@/lib/types";
 import {format,percent} from "@/lib/client";
 export function PageHeader({title,description,action}:{title:string;description:string;action?:React.ReactNode}){return <header className="page-header"><div><h1>{title}</h1><p>{description}</p></div>{action}</header>}
-export function Panel({title,description,children,className=""}:{title:string;description?:string;children:React.ReactNode;className?:string}){return <Card className={"panel "+className}><CardHeader><CardTitle>{title}</CardTitle>{description?<CardDescription>{description}</CardDescription>:null}</CardHeader><CardContent>{children}</CardContent></Card>}
+export function Panel({title,description,children,className=""}:{title:string;description?:string;children:React.ReactNode;className?:string}){return <Card className={"panel "+className}><CardHeader><CardTitle role="heading" aria-level={2}>{title}</CardTitle>{description?<CardDescription>{description}</CardDescription>:null}</CardHeader><CardContent>{children}</CardContent></Card>}
 export function ErrorBox({message}:{message:string}){return message?<div className="error-box" role="alert"><TriangleAlert size={18}/><span>{message}</span></div>:null}
 export function Loading(){return <div className="loading"><LoaderCircle className="spin" size={24}/> Reading your workspace…</div>}
 export function Empty({title,description}:{title:string;description:string}){return <div className="empty-state"><LayersMark/><h3>{title}</h3><p>{description}</p><Button render={<Link href="/new"/>} nativeButton={false}>Create a dataset <ArrowUpRight data-icon="inline-end"/></Button></div>}

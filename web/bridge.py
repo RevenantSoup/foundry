@@ -62,7 +62,7 @@ def read_packages():
             licences = sorted({r["licence"] for r in rows})
             meta = json.loads((manifest.parent / "dataset.json").read_text())
             packages.append({
-                "id": manifest.parent.name, "batch_id": meta["batch_id"],
+                "id": manifest.parent.name, "batch_id": meta["batch_id"], "created_at": manifest.stat().st_mtime,
                 "version": meta["version"], "count": len(rows), "licences": licences,
                 "attributions": sorted({r["attribution"] for r in rows}),
                 "train": sum(r["split"] == "train" for r in rows),
@@ -98,7 +98,7 @@ def snapshot():
                     "synthetic": plan.get("offline", True), "status": status,
                     "harvested": len(items), "shortlisted": shortlisted,
                     "verified": sum(r["vlm_verdict"] == "accept" for r in items),
-                    "packaged": exported[-1]["count"] if exported else 0,
+                    "packaged": max(exported, key=lambda p: p["created_at"])["count"] if exported else 0,
                     "qa_precision": precision, "reviewed": len(reviewed),
                     "qa_passed": bool(record["qa_passed"]),
                     "licences": sorted({r["licence"] for r in items}),
@@ -113,10 +113,10 @@ def snapshot():
         for row in rows:
             result[row[key]] = result.get(row[key], 0) + 1
         return [{"name": key, "value": value} for key, value in result.items()]
-    distribution = [{"name": f"{i/10:.1f}–{(i+1)/10:.1f}", "value": 0} for i in range(10)]
+    distribution = [{"name": f"{(i-10)/10:.1f}–{(i-9)/10:.1f}", "value": 0} for i in range(20)]
     for row in rows:
         if row["clip_score"] is not None:
-            distribution[min(9, max(0, int(row["clip_score"] * 10)))]["value"] += 1
+            distribution[min(19, max(0, int((row["clip_score"] + 1) * 10)))]["value"] += 1
     precision = [b["qa_precision"] for b in batches if b["qa_precision"] is not None]
     totals = {key: sum(b[key] for b in batches) for key in ("harvested", "shortlisted", "verified", "packaged")}
     totals.update(batches=len(batches), precision=sum(precision)/len(precision) if precision else None)
@@ -179,6 +179,14 @@ def command_for(action, batch, payload):
     return command
 
 
+def redact(message):
+    for name in ("YOUTUBE_API_KEY", "OPENAI_API_KEY"):
+        secret = os.environ.get(name)
+        if secret:
+            message = message.replace(secret, "[redacted]")
+    return message
+
+
 def run_job(job_id):
     identifier(job_id)
     path = root() / "web" / "jobs" / (job_id + ".json")
@@ -198,12 +206,12 @@ def run_job(job_id):
             env = dict(os.environ, PYTHONPATH=str(REPO), PYTHONUNBUFFERED="1")
             with subprocess.Popen(command, cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as process:
                 for line in process.stdout:
-                    job["log"] = (job["log"] + line)[-100000:]
+                    job["log"] = (job["log"] + redact(line))[-100000:]
                     atomic(path, job)
                 code = process.wait()
             job.update(exit_code=code, status="succeeded" if code == 0 else "failed")
         except Exception as error:
-            job.update(status="failed", exit_code=1, log=job["log"] + str(error))
+            job.update(status="failed", exit_code=1, log=job["log"] + redact(str(error)))
         job["finished_at"] = time.time()
         atomic(path, job)
 
@@ -235,12 +243,22 @@ def asset(payload):
     kind = payload["kind"]
     batch = identifier(payload.get("batch", "unused"))
     if kind in ("contact", "crop"):
-        detail = batch_detail(batch)
+        db = connection()
+        if not db:
+            raise ValueError("Unknown batch")
+        try:
+            if not db.execute("SELECT 1 FROM batches WHERE id=?", (batch,)).fetchone():
+                raise ValueError("Unknown batch")
+            sampled = kind == "contact" or db.execute(
+                "SELECT 1 FROM qa_samples WHERE batch_id=? AND row_id=?",
+                (batch, payload.get("id", ""))).fetchone()
+        finally:
+            db.close()
         if kind == "contact":
             path = root() / "qa" / batch / "contact-sheet.png"
         else:
             id = identifier(payload["id"])
-            if id not in {r["row_id"] for r in detail["samples"]}:
+            if not sampled:
                 raise ValueError("Image is not part of this QA sample")
             matches = list((root() / "qa" / batch).glob("*-" + id + ".png"))
             if not matches:
