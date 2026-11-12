@@ -309,7 +309,7 @@ def seed():
 if __name__ == "__main__":
     try:
         mode = sys.argv[1]
-        payload = json.loads(sys.stdin.read() or "{}") if mode != "job" else {}
+        payload = json.loads(sys.stdin.read() or "{}") if mode not in ("job", "seed") else {}
         if mode == "job":
             run_job(sys.argv[2])
         else:

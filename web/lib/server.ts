@@ -6,7 +6,7 @@ import {randomUUID} from "node:crypto";
 import type {Job} from "./types";
 
 export const repo = path.resolve(process.cwd(), "..");
-const configured = path.resolve(process.env.FOUNDRY_ROOT || path.join(repo,"data"));
+const configured = path.resolve(/* turbopackIgnore: true */ process.env.FOUNDRY_ROOT || path.join(repo,"data"));
 export const dataRoot = existsSync(path.join(configured,"pyproject.toml")) ? path.join(configured,"data") : configured;
 export const python = process.env.FOUNDRY_PYTHON || (existsSync(path.join(repo,".venv/bin/python")) ? path.join(repo,".venv/bin/python") : "python3");
 const bridgePath = path.join(repo,"web/bridge.py");
