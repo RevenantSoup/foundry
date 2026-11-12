@@ -180,3 +180,149 @@ Tests cover rights rejection, pHash re-encoding, cross-batch dedupe/drop logs,
 cosine dedupe, quota transactions and CLI exit 2, trimmed scene extraction capped at 40 frames, normalized
 embeddings, shortlist-only verification, resumability, QA boundaries, incomplete
 reviews, manifest completeness, versioning, source isolation and all CLI helps.
+
+## Frontend
+
+Foundry also includes a local web workspace in **web/**, built with Next.js App
+Router, TypeScript, Tailwind CSS, shadcn/ui (Base UI), Recharts, and Lucide.
+The Python CLI and its existing commands remain unchanged.
+
+### Install and run
+
+Requires Node.js 20.9+ (Node 22 or 24 recommended), Python 3.11+, and the Python
+dependencies installed above. From the repository root:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[test]'
+cd web
+npm install
+npm run dev
+```
+
+Open **http://localhost:3000**. The server can also be reached on the development
+environment's forwarded port. No authentication or payment collection is included;
+run it in your trusted local environment.
+
+For a production build on the same machine with the Python environment available:
+
+```bash
+cd web
+npm run build
+npm start
+```
+
+If the workspace is empty, create a clearly labeled synthetic demonstration batch:
+
+```bash
+cd web
+npm run seed
+```
+
+The seed command generates six references, then runs the real CLI's offline plan,
+harvest, filter, QA and package commands. It explicitly uses synthetic QA verdicts;
+its results are fixtures, not evidence of model performance or sellable datasets.
+Each invocation creates a unique fixture specification so global deduplication
+does not empty subsequent demonstrations. Empty workspaces also render normally
+without seeding.
+
+### Configuration
+
+Copy **web/.env.example** to **web/.env.local** if you need overrides; restart the
+dev server after changes. Never commit .env.local or API keys.
+
+| Variable | Default / purpose |
+| --- | --- |
+| FOUNDRY_ROOT | Absolute dataset directory, default repository **data/**. A repository-root path is also accepted and resolves to its data/ subdirectory. |
+| FOUNDRY_PYTHON | Absolute Python executable; defaults to repository **.venv/bin/python**, otherwise **python3** on PATH. This interpreter must have the CLI dependencies. |
+| FOUNDRY_VIDEO_DIR | Optional absolute directory of authorized **<video-id>.mp4** files for live YouTube extraction. |
+| YOUTUBE_API_KEY | Live YouTube Data API access only. |
+| OPENAI_API_KEY | Live image verification only. |
+
+Keys remain on the server. The New Dataset wizard defaults to offline synthetic
+mode; explicitly enable **Use live sources and models** for real integrations.
+Live filtering uses CLIP plus OpenAI verification. Keep offline and live batches
+in separate FOUNDRY_ROOT directories because embedding spaces cannot be mixed.
+The live adapters have the same source availability and licensing constraints
+documented in the CLI section above.
+
+### Pages
+
+- **Overview /**: live batch/row totals, average recorded QA precision, yield
+  funnel, recent batches, source and licence mix, YouTube daily quota, and the
+  local embedding index size. Quotas use the CLI's UTC daily counters.
+- **New dataset /new**: a five-step workflow. Upload exactly six reference images
+  (up to 10 MB each), generate the persisted plan, run harvest and filter, review
+  the 200 sampled images, then package and download. Job output and exit codes
+  appear in the UI, including partial source failures and quota exhaustion.
+  Use **Resume wizard** on a batch to continue after a reload.
+- **Batches /batches** and **/batches/[id]**: searchable batches, persisted plan
+  JSON, stage counts, drop reasons, and an explorer for harvested manifest rows.
+  Search, source/licence/verdict filters, column sorting, and pagination are
+  supported. Licence and attribution columns are pinned rather than hidden.
+- **QA /batches/[id]/qa**: contact sheet plus all 200 crops, individual
+  accept/reject controls, running precision and remaining reviews. Drafts persist
+  in the current browser. **Submit 200 verdicts** writes a CSV and executes the
+  real CLI quality gate. Below 90%, the job reports exit 1 and failing IDs;
+  packaging remains blocked. Reviewed bytes are hash-bound by the CLI.
+- **Dataset catalog /datasets**: packaged datasets with row counts, train/
+  validation counts, full provenance hash, licences, all attribution records, and
+  manifest/image ZIP downloads. Rights-cleared, non-synthetic Creative Commons
+  packages support persisted draft USD prices. Synthetic packages and packages
+  containing **platform_public_as_is** stay in a separate private archive with
+  pricing disabled. That platform label is not permission to resell.
+  CC-BY credit/change notices and CC-BY-SA ShareAlike requirements are visible.
+  Prices are editable listing drafts; no checkout, public listing, or automatic
+  legal clearance service is implemented.
+- **Analytics /analytics**: yield and precision across batches, CLIP score
+  distribution, source/licence mix, and quota usage over time. Synthetic batches
+  are included and clearly identified elsewhere in the workspace.
+
+### How the bridge works
+
+Next.js Node-runtime routes under **web/app/api/** spawn **web/bridge.py** using
+the configured Python interpreter. The bridge reads SQLite through a read-only
+connection, reads package manifests and QA artifacts, and invokes
+**python -m foundry.cli --root <FOUNDRY_ROOT>** for every pipeline mutation.
+There is no parallel mock backend and no rewrite of the CLI.
+
+- POST **/api/plan** validates multipart uploads and invokes **foundry plan**.
+- POST **/api/batches/[id]/actions** accepts harvest, filter, qa, review, or
+  package and starts a background worker. Review writes all 200 verdicts to CSV
+  before invoking **foundry qa --verdicts**.
+- GET **/api/jobs/[id]** returns durable status, output, and the actual exit code.
+  Refreshing the page reconnects to the active job. A per-root file lock prevents
+  simultaneous pipeline mutations; conflicts are explicit retryable failures.
+- GET **/api/state** and **/api/batches/[id]** read real dataset state. Browser
+  polling supplies current counts without fabricated progress percentages.
+- GET **/api/asset** streams validated contact sheets, crops, manifests and ZIPs.
+  ZIPs contain the immutable package images, manifest, and dataset metadata.
+- POST **/api/price** stores validated draft prices for eligible packages.
+
+Bridge jobs, uploaded references, review CSVs, download caches, and prices live
+under **data/web/** and are ignored by Git. Uploaded files are named by index,
+and batch/package identifiers are validated before filesystem access.
+Cross-origin mutation requests are refused. Jobs run on the local server, so this
+bridge requires a persistent Node/Python host; it is not a static export or a
+serverless deployment.
+
+### Frontend verification
+
+```bash
+# From repository root
+pytest -q                         # original 25 CLI tests
+pytest web/tests -q               # bridge unit tests
+cd web
+npm run lint
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+The Playwright suite starts **npm run dev** on port 3100 with an isolated ignored
+dataset root at **work/web-test-data**. It drives the full wizard, reviews every
+sample through the UI, deliberately fails QA at 179/200, checks server-side
+packaging refusal, corrects the verdicts, packages 200 rows, and verifies downloads,
+manifest filtering, catalog, analytics, navigation and mobile overflow. API tests
+also cover malformed uploads, path traversal, and cross-origin writes.
