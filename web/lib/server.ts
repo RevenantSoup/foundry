@@ -3,7 +3,7 @@ import {spawn} from "node:child_process";
 import {promises as fs, existsSync} from "node:fs";
 import path from "node:path";
 import {randomUUID} from "node:crypto";
-import {workerConfigured,remoteBridge,workerRequest} from "./worker";
+import {workerConfigured,remoteBridge,workerRequest,WorkerError} from "./worker";
 import type {Job} from "./types";
 
 export const repo = path.resolve(/* turbopackIgnore: true */ process.env.FOUNDRY_REPO || path.join(process.cwd(), ".."));
@@ -18,10 +18,10 @@ export async function bridge<T>(mode:string,body:object={}):Promise<T> {
   return new Promise((resolve,reject)=>{
     const child=spawn(python,[bridgePath,mode],{cwd:repo,env:env(),stdio:["pipe","pipe","pipe"]});
     let output="",errors="";let settled=false;
-    const timeout=setTimeout(()=>{child.kill();reject(new Error("Backend request timed out"));},120000);
+    const timeout=setTimeout(()=>{child.kill();reject(new WorkerError(503,"Dataset worker or local Python bridge timed out."));},["health","state","batch","discovery","dataset","usage","demo"].includes(mode)?8000:120000);
     child.stdout.on("data",chunk=>{output+=chunk.toString()});
     child.stderr.on("data",chunk=>{errors+=chunk.toString()});
-    child.on("error",error=>{clearTimeout(timeout);settled=true;reject(new Error("Python bridge unavailable: "+error.message))});
+    child.on("error",()=>{clearTimeout(timeout);settled=true;reject(new WorkerError(503,"Dataset worker or local Python bridge is unavailable."))});
     child.on("close",code=>{
       clearTimeout(timeout); if(settled)return;
       try {const result=JSON.parse(output); if(code!==0||result.error)reject(new Error(result.error||errors||"Backend failed"));else resolve(result);}
@@ -45,7 +45,7 @@ export async function startJob(batch:string,action:string,payload:object) {
   return job;
 }
 export async function jobStatus(id:string):Promise<Job> {
-  if(workerConfigured())return (await workerRequest("/jobs/"+validId(id))).json() as Promise<Job>;
+  if(workerConfigured())return (await workerRequest("/jobs/"+validId(id),undefined,false,8000)).json() as Promise<Job>;
   const file=path.join(dataRoot,"web/jobs",validId(id)+".json");
   const job=JSON.parse(await fs.readFile(file,"utf8"));
   if(job.status==="running" && job.pid) {

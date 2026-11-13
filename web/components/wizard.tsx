@@ -1,6 +1,6 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
-import {useState,useEffect,useSyncExternalStore} from "react";
+import {useState,useEffect,useRef,useSyncExternalStore} from "react";
 import {useRouter} from "next/navigation";
 import Link from "next/link";
 import {Upload,ArrowRight,ArrowLeft,Check,Play,Download,PackageCheck,LoaderCircle,ImagePlus} from "lucide-react";
@@ -9,7 +9,7 @@ import {Input} from "@/components/ui/input";
 import {Textarea} from "@/components/ui/textarea";
 import {Progress} from "@/components/ui/progress";
 import {Badge} from "@/components/ui/badge";
-import {PageHeader,Panel,ErrorBox,Loading,Fixture,JobLog} from "./common";
+import {PageHeader,Panel,ErrorBox,RemoteStatus,Fixture,JobLog} from "./common";
 import {api,asset,format,percent,useRemote} from "@/lib/client";
 import {hostedReferences} from "@/lib/references";
 import {useJob} from "@/lib/jobs";
@@ -23,21 +23,39 @@ function CreateWizard(){
  const hydrated=useSyncExternalStore(subscribeHydration,()=>true,()=>false);
  const router=useRouter();const [prompt,setPrompt]=useState("");const [files,setFiles]=useState<File[]>([]);const [previews,setPreviews]=useState<string[]>([]);
  const [target,setTarget]=useState(200);const [threshold,setThreshold]=useState(.28);const [live,setLive]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState("");
- useEffect(()=>()=>previews.forEach(url=>URL.revokeObjectURL(url)),[previews]);
- function addFiles(selected:FileList|null){if(!selected)return;const next=Array.from(selected);setFiles(next);setPreviews(next.map(f=>URL.createObjectURL(f)));setError("")}
- async function create(event:React.FormEvent){event.preventDefault();setError("");if(files.length!==6){setError("Upload exactly six reference images.");return}setBusy(true);
+ const filesRef=useRef<File[]>([]);const previewURLs=useRef(new Map<File,string>());
+ useEffect(()=>{const urls=previewURLs.current;return()=>{urls.forEach(url=>URL.revokeObjectURL(url));urls.clear()}},[]);
+ function fileKey(file:File){return JSON.stringify([file.name,file.size,file.type,file.lastModified])}
+ function invalidFile(file:File){return !file.type.startsWith("image/")?`${file.name}: choose an image file.`:file.size>10*1024*1024?`${file.name}: images must be 10 MB or smaller.`:""}
+ function updateFiles(next:File[]){const urls=previewURLs.current;for(const [file,url] of urls){if(!next.includes(file)){URL.revokeObjectURL(url);urls.delete(file)}}for(const file of next){if(!urls.has(file))urls.set(file,URL.createObjectURL(file))}filesRef.current=next;setFiles(next);setPreviews(next.map(file=>urls.get(file)!))}
+ function addFiles(selected:FileList|null,replaceIndex?:number){
+  if(busy||!selected?.length)return;
+  const next=[...filesRef.current];const messages:string[]=[];
+  for(const file of Array.from(selected)){
+   const invalid=invalidFile(file);if(invalid){messages.push(invalid);continue}
+   if(next.some((existing,index)=>index!==replaceIndex&&fileKey(existing)===fileKey(file))){messages.push(`${file.name}: already selected.`);continue}
+   if(replaceIndex!==undefined){next[replaceIndex]=file;break}
+   if(next.length===6){messages.push("Only six reference images can be selected. Remove or replace an image first.");continue}
+   next.push(file);
+  }
+  updateFiles(next);setError(messages.join(" "));
+ }
+ function removeFile(index:number){updateFiles(filesRef.current.filter((_,i)=>i!==index));setError("")}
+ async function create(event:React.FormEvent){event.preventDefault();if(busy)return;setError("");if(files.length!==6){setError("Upload exactly six reference images.");return}const invalid=files.map(invalidFile).find(Boolean);if(invalid){setError(invalid);return}if(new Set(files.map(fileKey)).size!==6){setError("Choose six distinct reference images.");return}setBusy(true);
   try{const runtime=await api<{remote:boolean}>("runtime");const selected=runtime.remote?await hostedReferences(files):files;const form=new FormData();form.set("prompt",prompt);form.set("target",String(target));form.set("threshold",String(threshold));form.set("live",String(live));selected.forEach(f=>form.append("refs",f));const detail=await api<Detail>("plan",{method:"POST",body:form});router.replace("/new?batch="+detail.id)}catch(e){setError((e as Error).message);setBusy(false)}
  }
  return <><PageHeader title="Start with a clear picture." description="One specification. Six references. A dataset you can trace."/><Steps current={1}/><div className="wizard-layout"><Panel title="What should your dataset contain?" description="Describe one visible attribute for the image search."><form onSubmit={create}><label htmlFor="prompt" className="field-label">Image specification</label><Textarea disabled={!hydrated} id="prompt" placeholder="e.g. People wearing safety glasses in a workshop" value={prompt} onChange={e=>setPrompt(e.target.value)} required maxLength={4000} rows={4}/><p className="field-help">Be specific about what must be visible. Multi-attribute queries are not supported.</p>
- <div className="upload-heading"><label className="field-label" htmlFor="refs">Reference images</label><span>{files.length} / 6 selected</span></div><label className="upload-zone" htmlFor="refs" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();addFiles(e.dataTransfer.files)}}><Upload size={25}/><strong>Drop six images, or browse files</strong><span>PNG, JPEG, WebP and other Pillow-readable formats · max. 10 MB each</span><input disabled={!hydrated} id="refs" aria-label="Reference images" type="file" accept="image/*" multiple onChange={e=>addFiles(e.target.files)}/></label>
- <p className="field-help">Hosted mode resizes reference previews to at most 1024 pixels for upload. Local mode retains the originals; harvested dataset images are unchanged.</p><div className="reference-grid">{Array.from({length:6},(_,i)=><div key={i}>{previews[i]?<img src={previews[i]} alt={"Reference "+(i+1)}/>:<><ImagePlus size={19}/><span>{String(i+1).padStart(2,"0")}</span></>}</div>)}</div>
+ <div className="upload-heading"><label className="field-label" htmlFor="refs">Reference images</label><span aria-live="polite">{files.length} / 6 selected</span></div><label className="upload-zone" htmlFor="refs" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();addFiles(e.dataTransfer.files)}}><Upload size={25}/><strong>Drop images, or browse files</strong><span>PNG, JPEG, WebP and other Pillow-readable formats · max. 10 MB each</span><input disabled={!hydrated||busy} id="refs" aria-describedby="reference-requirements" aria-label="Reference images" type="file" accept="image/*" multiple onChange={e=>{addFiles(e.target.files);e.target.value=""}}/></label>
+ <p className="field-help" id="reference-requirements">Select exactly six distinct images to generate a plan. Add images in multiple selections; existing selections are kept. Each image must be 10 MB or smaller.</p>
+ <p className="field-help">Hosted mode resizes reference previews to at most 1024 pixels for upload. Local mode retains the originals; harvested dataset images are unchanged.</p><div className="reference-grid">{Array.from({length:6},(_,i)=><div key={i} style={files[i]?{aspectRatio:"auto",justifyContent:"flex-start"}:undefined}>{files[i]?<><img style={{height:80,flexShrink:0}} src={previews[i]} alt={"Reference "+(i+1)+": "+files[i].name}/><span style={{maxWidth:"100%",overflowWrap:"anywhere"}}>{files[i].name}</span><button type="button" aria-label={"Remove reference "+(i+1)} disabled={busy} onClick={()=>removeFile(i)}>Remove</button><label style={{cursor:"pointer",fontSize:12}}>Replace<input style={{maxWidth:"100%"}} type="file" accept="image/*" aria-label={"Replace reference "+(i+1)} disabled={busy} onChange={e=>{addFiles(e.target.files,i);e.target.value=""}}/></label></>:<><ImagePlus size={19}/><span>{String(i+1).padStart(2,"0")}</span></>}</div>)}</div>
+
  <div className="form-row"><div><label className="field-label" htmlFor="target">Target images</label><Input id="target" type="number" min={200} max={10000} value={target} onChange={e=>setTarget(Number(e.target.value))}/><p className="field-help">Minimum 200 for the mandatory QA sample.</p></div><div><label className="field-label" htmlFor="threshold">CLIP threshold</label><Input id="threshold" type="number" min={-1} max={1} step={.01} value={threshold} onChange={e=>setThreshold(Number(e.target.value))}/><p className="field-help">Default 0.28 cosine similarity.</p></div></div>
  <label className="mode-control"><input type="checkbox" checked={live} onChange={e=>setLive(e.target.checked)}/><div><strong>Use live sources and models</strong><span>{live?"Requires configured YouTube / OpenAI keys and CLIP weights.":"Off by default. Offline mode creates clearly labeled synthetic fixtures."}</span></div></label><ErrorBox message={error}/><div className="wizard-actions"><span>Licence and attribution are required on every frame.</span><Button type="submit" disabled={busy||files.length!==6||!prompt.trim()}>{busy?<LoaderCircle className="spin"/>:null}{busy?"Creating plan…":"Generate plan"}<ArrowRight data-icon="inline-end"/></Button></div></form></Panel><div className="wizard-aside"><span className="aside-number">01 / 05</span><h2>A good dataset starts with a good brief.</h2><p>Your reference images guide live CLIP retrieval. The planner turns your specification into a consistent search and verification checklist.</p><div className="aside-rule"/><h3>What happens next</h3><ol><li>Review your search plan</li><li>Harvest licensed frames</li><li>Filter and verify a shortlist</li><li>Review 200 samples</li><li>Package with provenance</li></ol><p className="aside-small">Offline and live embeddings need separate data roots. Your existing CLI data remains the source of truth.</p></div></div></>
 }
 function RunWizard({id}:{id:string}){
  const {data,error,refresh}=useRemote<Detail>("batches/"+id,1500);const [selected,setSelected]=useState<number|null>(null);const [history,setHistory]=useState("");
  const worker=useJob(id,refresh);
- if(!data)return <><ErrorBox message={error}/><Loading/></>;
+ if(!data)return <RemoteStatus error={error} retry={refresh}/>;
  const step=selected??(data.packaged?5:data.samples.length?4:data.harvested?3:2);
  async function build(){if(await worker.run("harvest")){setHistory("Harvest completed. Any source warnings are retained in the batch drop log and job history.");if(await worker.run("filter")){setSelected(4)}}}
  return <><div className="breadcrumb"><Link href="/batches"><ArrowLeft size={13} className="inline"/> All batches</Link><span>/</span><code>{id.slice(0,12)}</code></div><PageHeader title="Make something useful." description={data.prompt} action={<Fixture synthetic={data.synthetic}/>}/><Steps current={step} onSelect={s=>{if(s>1)setSelected(s)}}/><ErrorBox message={error||worker.error}/>

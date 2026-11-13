@@ -10,6 +10,7 @@ async function dispatch(request:NextRequest,context:Context,post=false){
   const parts=(await context.params).path;
   const authorization=request.headers.get("authorization");
   const token=authorization?.startsWith("Bearer ")?authorization.slice(7):request.headers.get("x-api-key");
+  if(!token||token.length>512)return NextResponse.json({error:"unauthorized",message:"unauthorized"},{status:401,headers:{"Cache-Control":"no-store"}});
   const checkout=post&&parts.length===1&&parts[0]==="checkout";
   if(checkout){
     let body:Record<string,unknown>={};try{const parsed=await request.json();if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed))body=parsed}catch{/* Authentication/configuration takes priority; invalid fields remain a 400 once configured. */}

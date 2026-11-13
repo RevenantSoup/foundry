@@ -7,14 +7,14 @@ import {Download,ArrowUpRight,ShieldCheck,LockKeyhole,Check,Database} from "luci
 import {Button} from "@/components/ui/button";
 import {Badge} from "@/components/ui/badge";
 import {Input} from "@/components/ui/input";
-import {PageHeader,Panel,ErrorBox,Loading,Fixture} from "./common";
+import {PageHeader,Panel,ErrorBox,RemoteStatus,Fixture} from "./common";
 import {asset,format,post,useRemote} from "@/lib/client";
 import type {Package,State,Discovery} from "@/lib/types";
 export function Catalog(){
  const admin=useAdmin();const router=useRouter();const params=useSearchParams();
  const query=params.toString();
- const {data:results,error}=useRemote<Discovery>("datasets?"+query);
- const {data,refresh}=useRemote<State>(admin?"state":null);
+ const {data:results,error,refresh:retry}=useRemote<Discovery>("datasets?"+query);
+ const {data,error:archiveError,refresh}=useRemote<State>(admin?"state":null);
  function apply(event:React.FormEvent<HTMLFormElement>){
   event.preventDefault();const next=new URLSearchParams();
   for(const [key,value] of new FormData(event.currentTarget))if(String(value).trim())next.set(key,String(value));
@@ -23,7 +23,7 @@ export function Catalog(){
  const {data:demos}=useRemote<Discovery>("demo");
  const archive=data?.packages.filter(p=>!p.sale_cleared||p.synthetic)||[];
  return <><PageHeader title="Data with a paper trail." description="Discover traceable datasets. Clear rights, complete attribution, transparent prices."/>
- <div className="catalog-callout"><ShieldCheck size={21}/><p><strong>Rights before revenue.</strong> Only rights-cleared Creative Commons packages appear in discovery. Platform provenance and synthetic fixtures stay in the private archive. Prices are USD listing prices; checkout is not live.</p></div>
+ <div className="catalog-callout"><ShieldCheck size={21}/><p><strong>Rights before revenue.</strong> Only rights-cleared Creative Commons packages appear in discovery. Platform provenance and synthetic fixtures stay in the private archive. Prices are USD listing prices. Checkout uses Stripe test mode only; no real money.</p></div>
  <form className="discovery-filters" onSubmit={apply} key={query}>
  <div className="filter-search"><label className="field-label" htmlFor="discover-q">Keyword</label><Input id="discover-q" name="q" defaultValue={params.get("q")||""} placeholder="Search name or description…"/></div>
  <div><label className="field-label" htmlFor="discover-licence">Licence</label><select id="discover-licence" name="licence" defaultValue={params.get("licence")||""}><option value="">All licences</option>{["CC0","CC-BY","CC-BY-SA","platform_public_as_is"].map(l=><option key={l}>{l}</option>)}</select></div>
@@ -33,12 +33,12 @@ export function Catalog(){
  <div><label className="field-label">Price · USD</label><div className="range-fields"><Input aria-label="Minimum price" type="number" min={0} step=".01" name="min_price" defaultValue={params.get("min_price")||""} placeholder="Min"/><Input aria-label="Maximum price" type="number" min={0} step=".01" name="max_price" defaultValue={params.get("max_price")||""} placeholder="Max"/></div></div>
  <div><label className="field-label" htmlFor="discover-sort">Sort by</label><select id="discover-sort" name="sort" defaultValue={params.get("sort")||"newest"}><option value="newest">Newest</option><option value="largest">Largest</option><option value="price_low">Price: low to high</option><option value="price_high">Price: high to low</option></select></div>
  <div className="filter-actions"><label><input name="free" type="checkbox" value="true" defaultChecked={params.get("free")==="true"}/> Free only</label><Button type="submit">Apply filters</Button><Button variant="ghost" onClick={()=>router.replace("/datasets")}>Reset</Button></div></form>
- <ErrorBox message={error}/><div className="section-heading"><span>{results?.total??"…"} DATASETS FOUND</span><span>Filters combine and are evaluated in SQLite</span></div>
- {!results?<Loading/>:results.items.length?<div className="catalog-grid">{results.items.map(p=><DatasetCard key={p.id} dataset={p} refresh={refresh} owner={admin}/>)}</div>:<Panel title="No datasets match yet." description="Try broader filters, or package a rights-cleared, non-synthetic dataset."><p className="quiet-note">YouTube platform_public_as_is is recorded provenance, not permission to sell. Those packages remain unavailable for sale.</p></Panel>}
+ {results?<ErrorBox message={error} retry={retry}/>:null}<div className="section-heading"><span>{results?.total??"…"} DATASETS FOUND</span><span>Filters combine and are evaluated in SQLite</span></div>
+ {!results?<RemoteStatus error={error} retry={retry}/>:results.items.length?<div className="catalog-grid">{results.items.map(p=><DatasetCard key={p.id} dataset={p} refresh={refresh} owner={admin}/>)}</div>:<Panel title="No datasets match yet." description="Try broader filters, or package a rights-cleared, non-synthetic dataset."><p className="quiet-note">YouTube platform_public_as_is is recorded provenance, not permission to sell. Those packages remain unavailable for sale.</p></Panel>}
  {results&&results.total>results.limit?<div className="pagination"><span>Page {results.page} of {Math.ceil(results.total/results.limit)}</span><div className="button-row">{[-1,1].map(delta=><Button key={delta} variant="outline" disabled={delta<0?results.page===1:results.page*results.limit>=results.total} onClick={()=>{const next=new URLSearchParams(query);next.set("page",String(results.page+delta));router.replace("/datasets?"+next)}}>{delta<0?"Previous":"Next"}</Button>)}</div></div>:null}
  {demos?.items.length?<><div className="section-heading archive-heading"><span>DEMO DATASETS · SYNTHETIC · NOT FOR SALE</span></div><div className="catalog-grid">{demos.items.map(p=><DatasetCard key={p.id} dataset={p} refresh={refresh}/>)}</div></>:null}
  {admin?<><div className="section-heading archive-heading"><span>PRIVATE PACKAGE ARCHIVE</span><span>Not offered for sale · owner exports</span></div>
- {archive.length?<div className="catalog-grid">{archive.map(p=><DatasetCard key={p.id} dataset={p} refresh={refresh} owner={admin}/>)}</div>:<p className="quiet-note">No private packages. <Link href="/new" className="text-link">Create a dataset <ArrowUpRight size={13}/></Link></p>}</>:null}
+ {!data?<RemoteStatus error={archiveError} retry={refresh}/>:archive.length?<div className="catalog-grid">{archive.map(p=><DatasetCard key={p.id} dataset={p} refresh={refresh} owner={admin}/>)}</div>:<p className="quiet-note">No private packages. <Link href="/new" className="text-link">Create a dataset <ArrowUpRight size={13}/></Link></p>}</>:null}
  </>}
 
 function DatasetCard({dataset:p,refresh,owner=false}:{dataset:Package;refresh:()=>Promise<void>;owner?:boolean}){

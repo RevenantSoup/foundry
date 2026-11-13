@@ -42,6 +42,7 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           FOUNDRY_PYTHON="$(command -v python)" npm run test:e2e
+          FOUNDRY_PYTHON="$(command -v python)" npm run test:e2e -- --config playwright.unavailable.config.ts
           FOUNDRY_PYTHON="$(command -v python)" npm run test:e2e -- --config playwright.payments.config.ts
           FOUNDRY_TEST_REMOTE=1 FOUNDRY_PYTHON="$(command -v python)" npm run test:e2e -- --config playwright.payments.config.ts
       - name: Docker build — CLI

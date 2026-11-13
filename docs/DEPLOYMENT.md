@@ -460,3 +460,38 @@ unauthenticated dashboard without adding an external access gate.
   environment; YouTube/OpenAI keys were unavailable. No bypass was added.
 - Real provider credentials, public HTTPS/domain configuration, Sentry delivery,
   backup retention/restore and production load tests require operator validation.
+
+## Workspace failures and Phase 6 verification
+
+Ordinary browser reads time out after 10 seconds. Workspace/health RPC reads have
+an 8-second backend deadline; job creation/planning retain their 120-second
+budget and file streaming retains 300 seconds. CLI jobs remain detached and are
+polled rather than given the short read deadline. A terminal read failure stops
+polling, replaces the initial spinner with an error and Retry, and preserves any
+previously loaded data. Retry starts a fresh request; navigating away cancels the
+browser request and timer. Authentication failures, invalid responses and network
+errors remain distinguishable from `database_unavailable`.
+
+On Vercel without `FOUNDRY_WORKER_URL`, a page shell or successful admin login is
+not proof that the dataset backend works. Public dataset routes return sanitized
+503 infrastructure errors when the Python bridge cannot start. Health remains
+503 with `db:error`; missing buyer credentials return 401 without needing Python.
+No persistent serverless SQLite workaround is provided.
+
+See [Phase 6 pipeline evidence](PHASE6_PIPELINE.md) and the
+[live audit / hosting assessment](PHASE6_LIVE_AUDIT.md). The offline fixture can
+prove CLI persistence and packaging, but remains synthetic and unsaleable. It
+must not be relabelled to make a purchase test pass.
+
+Focused regressions use the existing Playwright setup:
+
+```sh
+cd web
+npm run test:e2e -- stability.spec.ts uploader.spec.ts
+npm run test:e2e -- --config playwright.unavailable.config.ts
+```
+
+The second profile deliberately uses a nonexistent Python interpreter, exercises
+real routes rather than frontend mocks, and stores any test data under
+`work/unavailable-test-data`. CI runs both profiles and the existing local/remote
+payment tests. Installing Chromium uses the existing `npx playwright install chromium`.

@@ -5,14 +5,14 @@ import {Plus,Search,ArrowLeft,ArrowUpDown,Play,ScanLine,PackageCheck,Download} f
 import {Button} from "@/components/ui/button";
 import {Input} from "@/components/ui/input";
 import {Badge} from "@/components/ui/badge";
-import {PageHeader,Panel,BatchList,ErrorBox,Loading,Fixture,Status,JobLog} from "./common";
+import {PageHeader,Panel,BatchList,ErrorBox,RemoteStatus,Fixture,Status,JobLog} from "./common";
 import {useRemote,format,percent,asset} from "@/lib/client";
 import {useJob} from "@/lib/jobs";
 import type {State,Detail,DatasetRow} from "@/lib/types";
 export function Batches(){
- const {data,error}=useRemote<State>("state");const [search,setSearch]=useState("");const [status,setStatus]=useState("all");
+ const {data,error,refresh}=useRemote<State>("state");const [search,setSearch]=useState("");const [status,setStatus]=useState("all");
  const batches=data?.batches.filter(b=>b.prompt.toLowerCase().includes(search.toLowerCase())&&(status==="all"||b.status===status))||[];
- return <><PageHeader title="Every batch, in view." description="Follow each specification from the first frame to the final package." action={<Button render={<Link href="/new"/>} nativeButton={false}><Plus/>New dataset</Button>}/><ErrorBox message={error}/><div className="toolbar"><div className="search-input"><Search size={15}/><Input aria-label="Search batches" placeholder="Search specifications…" value={search} onChange={e=>setSearch(e.target.value)}/></div><select aria-label="Batch status" value={status} onChange={e=>setStatus(e.target.value)}><option value="all">All statuses</option>{["Planned","Harvested","Filtered","Review","QA passed","Packaged"].map(s=><option key={s}>{s}</option>)}</select></div>{data?<Panel title={format(batches.length)+" batches"}><BatchList batches={batches}/></Panel>:<Loading/>}</>
+ return <><PageHeader title="Every batch, in view." description="Follow each specification from the first frame to the final package." action={<Button render={<Link href="/new"/>} nativeButton={false}><Plus/>New dataset</Button>}/>{data?<ErrorBox message={error} retry={refresh}/>:null}<div className="toolbar"><div className="search-input"><Search size={15}/><Input aria-label="Search batches" placeholder="Search specifications…" value={search} onChange={e=>setSearch(e.target.value)}/></div><select aria-label="Batch status" value={status} onChange={e=>setStatus(e.target.value)}><option value="all">All statuses</option>{["Planned","Harvested","Filtered","Review","QA passed","Packaged"].map(s=><option key={s}>{s}</option>)}</select></div>{data?<Panel title={format(batches.length)+" batches"}><BatchList batches={batches}/></Panel>:<RemoteStatus error={error} retry={refresh}/>}</>
 }
 const columns: {key:keyof DatasetRow;label:string}[]=[{key:"id",label:"ID"},{key:"source",label:"Source"},{key:"source_url",label:"Source URL"},{key:"licence",label:"Licence"},{key:"attribution",label:"Attribution"},{key:"clip_score",label:"CLIP score"},{key:"vlm_verdict",label:"VLM verdict"},{key:"qa_verdict",label:"QA verdict"},{key:"split",label:"Split"},{key:"provenance_hash",label:"Provenance hash"}];
 columns.sort((a,b)=> (a.key==="licence"?-2:a.key==="attribution"?-1:0)-(b.key==="licence"?-2:b.key==="attribution"?-1:0));
@@ -27,7 +27,7 @@ export function ManifestTable({rows}:{rows:DatasetRow[]}){
 }
 export function BatchDetail({id}:{id:string}){
  const {data,error,refresh}=useRemote<Detail>("batches/"+id,2000);const worker=useJob(id,refresh);
- if(!data)return <><ErrorBox message={error}/><Loading/></>;
+ if(!data)return <RemoteStatus error={error} retry={refresh}/>;
  return <><div className="breadcrumb"><Link href="/batches"><ArrowLeft size={12} className="inline"/> Batches</Link><span>/</span><code>{id.slice(0,12)}</code></div><PageHeader title={data.prompt} description={"Batch "+id} action={<Fixture synthetic={data.synthetic}/>}/><div className="button-row"><Status batch={data}/><Button variant="outline" render={<Link href={"/new?batch="+id}/>} nativeButton={false}><Play/>Resume wizard</Button><Button variant="outline" render={<Link href={"/batches/"+id+"/qa"}/>} nativeButton={false}><ScanLine/>Review QA</Button><Button disabled={worker.busy||!data.qa_passed} onClick={()=>worker.run("package")}><PackageCheck/>Package dataset</Button></div><ErrorBox message={error||worker.error}/><JobLog job={worker.job}/>
  <div className="detail-stats">{[["Harvested",format(data.harvested)],["Shortlisted",format(data.shortlisted)],["Verified",format(data.verified)],["Packaged",format(data.packaged)],["QA precision",percent(data.qa_precision)]].map(([label,value])=><div key={label}><strong>{value}</strong><span>{label}</span></div>)}</div>
  {data.synthetic?<div className="quiet-note">Synthetic fixture batch. Images, embeddings, and verifier outputs are offline test data, not matching source photographs.</div>:null}

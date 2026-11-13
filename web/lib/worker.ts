@@ -14,7 +14,7 @@ function settings(){
  if((url.protocol!=="https:"&&!(url.protocol==="http:"&&loopback))||url.username||url.password||url.search||url.hash||key.length<32||key.length>256||/[^\x21-\x7e]/.test(key)||/^(fdy_|replace|change|<)/i.test(key))throw new WorkerError(503,"Worker configuration is invalid.");
  return {base:url.href.replace(/\/$/,""),key};
 }
-export async function workerRequest(path:string,body?:unknown,stream=false):Promise<Response>{
+export async function workerRequest(path:string,body?:unknown,stream=false,timeoutMs=stream?300000:120000):Promise<Response>{
  const {base,key}=settings();
  // Native server-only HTTP avoids Next's patched fetch/cache layer for RPC and file streams.
  const response=await new Promise<Response>((resolve,reject)=>{
@@ -28,7 +28,7 @@ export async function workerRequest(path:string,body?:unknown,stream=false):Prom
     resolve(new Response(Readable.toWeb(incoming) as ReadableStream<Uint8Array>,{status:incoming.statusCode||502,headers}));
    }catch{clearTimeout(deadline);incoming.destroy();reject(new WorkerError(502,"Worker returned an invalid response."))}
   });
-  const deadline=setTimeout(()=>request.destroy(new Error("Worker timeout")),stream?300000:120000);
+  const deadline=setTimeout(()=>request.destroy(new Error("Worker timeout")),timeoutMs);
   request.once("error",()=>{clearTimeout(deadline);reject(new WorkerError(503,"Worker is unreachable or the request timed out. Retry to resume the operation."))});
   request.end(encoded);
  });
@@ -42,7 +42,7 @@ export async function workerRequest(path:string,body?:unknown,stream=false):Prom
  return response;
 }
 export async function remoteBridge<T>(mode:string,payload:object):Promise<T>{
- const response=await workerRequest("/bridge",{mode,payload});
+ const response=await workerRequest("/bridge",{mode,payload},false,["health","state","batch","discovery","dataset","usage","demo"].includes(mode)?8000:120000);
  try{return await response.json() as T}catch{throw new WorkerError(502,"Worker returned an invalid response.")}
 }
 export function streamedResponse(response:Response){

@@ -6,13 +6,13 @@ import Image from "next/image";
 import {Check,X,ArrowLeft,ArrowRight,ScanLine,ExternalLink} from "lucide-react";
 import {Button} from "@/components/ui/button";
 import {Progress} from "@/components/ui/progress";
-import {PageHeader,Panel,ErrorBox,Loading,Fixture,JobLog} from "./common";
+import {PageHeader,Panel,ErrorBox,RemoteStatus,Fixture,JobLog} from "./common";
 import {asset,percent,useRemote} from "@/lib/client";
 import {useJob} from "@/lib/jobs";
 import type {Detail} from "@/lib/types";
 export function QAReviewPage({id}:{id:string}){
  const {data,error,refresh}=useRemote<Detail>("batches/"+id,2000);
- if(!data)return <><ErrorBox message={error}/><Loading/></>;
+ if(!data)return <RemoteStatus error={error} retry={refresh}/>;
  return <><div className="breadcrumb"><Link href={"/batches/"+id}><ArrowLeft size={13} className="inline"/> Back to batch</Link></div><PageHeader title="A human check, on every sample." description={data.prompt} action={<Fixture synthetic={data.synthetic}/>}/><ReviewPanel detail={data} refresh={refresh}/></>
 }
 export function ReviewPanel({detail,refresh,onContinue}:{detail:Detail;refresh:()=>Promise<void>;onContinue?:()=>void}){

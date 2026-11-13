@@ -22,11 +22,19 @@ db=Database(root/'foundry.sqlite3')
 batch=uuid.uuid4().hex;prompt='TEST marketplace safety glasses '+batch[:6]
 with db.conn:db.conn.execute('INSERT INTO batches(id,plan) VALUES(?,?)',(batch,json.dumps({'prompt':prompt,'attribute':'safety glasses','target':200,'offline':False})))
 rng=random.Random(batch)
+# TEST-ONLY rights fixtures must satisfy the real global dedupe gate even when
+# suites are rerun in the same test root. Never weaken Database.insert.
+seen_hashes=[int(row[0],16) for row in db.conn.execute("SELECT phash FROM rows")]
 for i in range(200):
     id=batch+f'{i:03d}'
+    for _ in range(10000):
+        phash=rng.getrandbits(64)
+        if all((old^phash).bit_count()>10 for old in seen_hashes):break
+    else:raise RuntimeError('Could not generate distinct test fixture hashes')
     row=Row(id,'openverse','https://example.org/TEST-ONLY/'+id,'CC-BY','Test creator — fixture only',
-            phash=f'{rng.getrandbits(64):016x}',clip_score=.8,vlm_verdict='accept',batch_id=batch)
+            phash=f'{phash:016x}',clip_score=.8,vlm_verdict='accept',batch_id=batch)
     assert db.insert(row)
+    seen_hashes.append(phash)
     Image.new('RGB',(64,64),(i,80,120)).save(raw/id,format='PNG')
 sheet,template=create_sheet(db,batch,raw,root/'qa'/batch)
 with template.open('w',newline='') as stream:

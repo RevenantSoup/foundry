@@ -2,6 +2,7 @@ import {test,expect} from "@playwright/test";
 import {execFileSync} from "node:child_process";
 import {createHmac,randomUUID} from "node:crypto";
 import path from "node:path";
+import {writeFileSync} from "node:fs";
 const repo=path.resolve(process.cwd(),"..");
 const python=process.env.FOUNDRY_PYTHON||path.join(repo,".venv/bin/python");
 const root=path.join(repo,"work/web-test-data");
@@ -40,6 +41,22 @@ test("raw signed webhook alone grants one expiring dataset download",async({requ
  const paid=await(await request.get("/api/v1/orders/"+order.order_id,{headers})).json();expect(paid.status).toBe("paid");expect(paid.expires_at).toBeGreaterThan(Date.now()/1000);expect(paid.expires_at).toBeLessThanOrEqual(Date.now()/1000+86400);
  expect(JSON.stringify(paid)).not.toContain(root);expect(JSON.stringify(paid)).not.toContain(process.env.FOUNDRY_WORKER_API_KEY!);expect(paid.download_url).toMatch(/^\/api\/v1\/downloads\?token=/);
  const zip=await request.get(paid.download_url);expect(zip.status()).toBe(200);expect((await zip.body()).subarray(0,2).toString()).toBe("PK");
+ const artifact=JSON.parse(execFileSync(python,["-c",String.raw`
+import csv,hashlib,io,json,sqlite3,sys,zipfile
+from pathlib import Path
+root=Path(sys.argv[1]);dataset=sys.argv[2];order=sys.argv[3];package=root/'packages'/dataset
+archive=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read()))
+rows=list(csv.DictReader(io.StringIO(archive.read('manifest.csv').decode())))
+assert len(rows)==200
+assert set(archive.namelist())=={'manifest.csv','dataset.json'}|{'images/'+row['id'] for row in rows}
+for name in archive.namelist():assert archive.read(name)==(package/name).read_bytes()
+db=sqlite3.connect(root/'foundry.sqlite3');db.row_factory=sqlite3.Row
+record=dict(db.execute('SELECT id,dataset_id,status,amount,currency,stripe_session_id FROM orders WHERE id=?',(order,)).fetchone())
+assert record['status']=='paid' and record['dataset_id']==dataset and record['amount']==1999 and record['currency']=='USD'
+assert db.execute('SELECT count(*) FROM download_grants WHERE order_id=?',(order,)).fetchone()[0]==1
+print(json.dumps({'order':record,'download_status':200,'matched_images':len(rows),'zip_entries':len(archive.namelist()),'manifest_sha256':hashlib.sha256(archive.read('manifest.csv')).hexdigest(),'synthetic_rights_fixture':True}))
+`,root,fixture.dataset,order.order_id],{cwd:repo,input:await zip.body(),encoding:"utf8"}));
+ writeFileSync(path.join(repo,process.env.FOUNDRY_TEST_REMOTE==="1"?"work/phase6-remote-sales-evidence.json":"work/phase6-sales-evidence.json"),JSON.stringify(artifact,null,2)+"\n");
  const manifest=await request.get(paid.download_url+"&kind=manifest");expect(manifest.status()).toBe(200);expect(await manifest.text()).toContain("CC-BY");
  expect((await request.get(paid.download_url+"tamper")).status()).toBe(403);
  const counts=JSON.parse(code(database+`import json;print(json.dumps([d.conn.execute('SELECT count(*) FROM orders WHERE stripe_session_id=?',(${JSON.stringify(order.session_id)},)).fetchone()[0],d.conn.execute('SELECT count(*) FROM download_grants WHERE order_id=?',(${JSON.stringify(order.order_id)},)).fetchone()[0]]))`));expect(counts).toEqual([1,1]);

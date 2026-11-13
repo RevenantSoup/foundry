@@ -12,7 +12,7 @@ export const runtime="nodejs";
 export const dynamic="force-dynamic";
 export const maxDuration=300;
 type Context={params:Promise<{path:string[]}>};
-function errorResponse(error:unknown) {void reportError(error);return apiError("request_failed",error instanceof WorkerError?error.message:"Request could not be completed. Check the inputs and retry.",error instanceof WorkerError?error.status:400)}
+function errorResponse(error:unknown) {void reportError(error);return apiError(error instanceof WorkerError&&error.status===503?"database_unavailable":"request_failed",error instanceof WorkerError?error.message:"Request could not be completed. Check the inputs and retry.",error instanceof WorkerError?error.status:400)}
 export async function GET(request:NextRequest,context:Context) {
  try {
   const parts=(await context.params).path;

@@ -4,17 +4,17 @@ import {UsagePanel} from "./usage";
 import {Plus,Layers3,ImageIcon,ListFilter,PackageCheck,ScanLine,ArrowUpRight,ArrowDownRight,Database} from "lucide-react";
 import {Button} from "@/components/ui/button";
 import {Progress} from "@/components/ui/progress";
-import {PageHeader,Panel,BatchList,ErrorBox,Loading} from "./common";
+import {PageHeader,Panel,BatchList,ErrorBox,RemoteStatus} from "./common";
 import {Funnel,MixChart,BatchHistory,Distribution,QuotaHistory} from "./charts";
 import {format,percent,useRemote} from "@/lib/client";
 import type {State} from "@/lib/types";
 export function Overview(){
- const {data,error}=useRemote<State>("state");
- if(!data)return <><ErrorBox message={error}/><Loading/></>;
+ const {data,error,refresh}=useRemote<State>("state");
+ if(!data)return <RemoteStatus error={error} retry={refresh}/>;
  const today=new Date().toISOString().slice(0,10);
  const used=data.quota.find(q=>q.day===today&&q.source==="youtube")?.units||0;
  const stats=[{label:"Total batches",value:format(data.totals.batches),icon:Layers3,note:"Across your workspace"},{label:"Harvested frames",value:format(data.totals.harvested),icon:ImageIcon,note:"Deduplicated at source"},{label:"Shortlisted",value:format(data.totals.shortlisted),icon:ListFilter,note:"Passed to verification"},{label:"Packaged rows",value:format(data.totals.packaged),icon:PackageCheck,note:"Ready to download"},{label:"Avg. QA precision",value:percent(data.totals.precision),icon:ScanLine,note:"Across reviewed batches"}];
- return <><PageHeader title="Your data, refined." description="From image specifications to traceable datasets." action={<Button size="lg" render={<Link href="/new"/>} nativeButton={false}><Plus data-icon="inline-start"/>New dataset</Button>}/><ErrorBox message={error}/>
+ return <><PageHeader title="Your data, refined." description="From image specifications to traceable datasets." action={<Button size="lg" render={<Link href="/new"/>} nativeButton={false}><Plus data-icon="inline-start"/>New dataset</Button>}/><ErrorBox message={error} retry={refresh}/>
  <section className="stats-grid">{stats.map(({label,value,icon:Icon,note})=><div className="stat" key={label}><div className="stat-label"><Icon size={16}/>{label}</div><strong>{value}</strong><span>{note}</span></div>)}</section>
  <div className="section-heading"><span><i/> WORKSPACE ACTIVITY</span><span>Live from your local SQLite database</span></div>
  <div className="dashboard-charts"><Panel title="Yield pipeline" description="Fewer frames. A stronger dataset."><Funnel totals={data.totals}/><div className="panel-foot"><ArrowDownRight size={14}/>{data.totals.harvested?((data.totals.packaged/data.totals.harvested)*100).toFixed(1):0}% of harvested frames packaged</div></Panel><Panel title="Source mix" description="Where your harvested frames come from.">{data.sources.length?<MixChart data={data.sources}/>:<div className="empty-chart">Your sources will appear after harvest.</div>}</Panel></div>
@@ -23,7 +23,7 @@ export function Overview(){
  <UsagePanel/><div className="workspace-strip"><Database size={16}/><span>Local embedding index</span><strong>{(data.embedding_bytes/1024/1024).toFixed(2)} MB</strong><span className="muted">Licence and attribution travel with every export.</span></div></>
 }
 export function Analytics(){
- const {data,error}=useRemote<State>("state");
- if(!data)return <><ErrorBox message={error}/><Loading/></>;
- return <><PageHeader title="A closer look." description="Understand yield, quality, and the sources behind your datasets."/><ErrorBox message={error}/><div className="two-column"><Panel title="Yield over batches" description="Chronological batches · frames at each stage."><BatchHistory batches={data.batches}/></Panel><Panel title="QA precision" description="Reviewed samples only · target ≥90%."><BatchHistory batches={data.batches} precision/></Panel><Panel title="CLIP score distribution" description="All scored frames, in cosine similarity bands."><Distribution data={data.distribution}/></Panel><Panel title="Source mix" description="Global harvested rows by source."><MixChart data={data.sources}/></Panel><Panel title="Licence mix" description="Global harvested rows by declared rights."><MixChart data={data.licences}/></Panel><Panel title="YouTube quota over time" description="Persisted daily counters · UTC · 10,000 unit ceiling."><QuotaHistory data={data.quota}/>{!data.quota.length?<p className="muted">No live API usage recorded.</p>:null}</Panel></div><UsagePanel/><p className="quiet-note">Synthetic fixture batches are included and labeled throughout the workspace. Fake scores and QA verdicts do not measure model quality.</p></>
+ const {data,error,refresh}=useRemote<State>("state");
+ if(!data)return <RemoteStatus error={error} retry={refresh}/>;
+ return <><PageHeader title="A closer look." description="Understand yield, quality, and the sources behind your datasets."/><ErrorBox message={error} retry={refresh}/><div className="two-column"><Panel title="Yield over batches" description="Chronological batches · frames at each stage."><BatchHistory batches={data.batches}/></Panel><Panel title="QA precision" description="Reviewed samples only · target ≥90%."><BatchHistory batches={data.batches} precision/></Panel><Panel title="CLIP score distribution" description="All scored frames, in cosine similarity bands."><Distribution data={data.distribution}/></Panel><Panel title="Source mix" description="Global harvested rows by source."><MixChart data={data.sources}/></Panel><Panel title="Licence mix" description="Global harvested rows by declared rights."><MixChart data={data.licences}/></Panel><Panel title="YouTube quota over time" description="Persisted daily counters · UTC · 10,000 unit ceiling."><QuotaHistory data={data.quota}/>{!data.quota.length?<p className="muted">No live API usage recorded.</p>:null}</Panel></div><UsagePanel/><p className="quiet-note">Synthetic fixture batches are included and labeled throughout the workspace. Fake scores and QA verdicts do not measure model quality.</p></>
 }
