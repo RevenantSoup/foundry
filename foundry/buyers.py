@@ -1,4 +1,4 @@
-"""Buyer keys are read-only credentials, hashed at rest and rate limited in SQLite."""
+"""Buyer keys authorize dataset reads and test checkout, hashed at rest and rate limited in SQLite."""
 from datetime import datetime, timezone
 import hashlib
 import secrets

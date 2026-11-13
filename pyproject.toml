@@ -9,7 +9,7 @@ description = "Offline-first licensed image dataset CLI"
 requires-python = ">=3.11"
 dependencies = [
   "requests>=2.31", "Pillow>=10", "imagehash>=4.3", "numpy>=1.24",
-  "sentence-transformers>=2.7", "ffmpeg-python>=0.2", "click>=8.1"
+  "sentence-transformers>=2.7", "ffmpeg-python>=0.2", "click>=8.1", "stripe>=17,<18"
 ]
 
 [project.optional-dependencies]

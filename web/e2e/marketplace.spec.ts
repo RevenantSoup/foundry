@@ -54,7 +54,7 @@ test("combined URL filters, detail attribution, reviewed samples and USD pricing
  const detail=await(await request.get("/api/datasets/"+fixture.dataset)).json();expect(detail.price_cents).toBe(4999);
  await expect(page.getByRole("heading",{name:"$49.99",exact:true})).toBeVisible();
  await page.getByRole("button",{name:"Buy dataset",exact:true}).click();
- await expect(page.getByText("Checkout is not live yet — this is a placeholder. No payment will be taken.")).toBeVisible();
+ await expect(page.getByRole("heading",{name:"Stripe test checkout",exact:true})).toBeVisible();
  expect(await page.locator('input[autocomplete="cc-number"]').count()).toBe(0);
  await page.screenshot({path:"/tmp/foundry-phase3-detail.png",fullPage:true});
  await page.goto("/datasets?q="+encodeURIComponent(fixture.prompt)+"&free=true");

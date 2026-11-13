@@ -1,5 +1,8 @@
 """Local-only JSON bridge. All mutations execute the existing Foundry CLI."""
 from __future__ import annotations
+import base64
+import binascii
+import shutil
 import csv
 import fcntl
 import hashlib
@@ -198,11 +201,13 @@ def command_for(action, batch, payload):
 
 
 def redact(message):
-    for name in ("YOUTUBE_API_KEY", "OPENAI_API_KEY", "OPENVERSE_API_KEY"):
+    for name in ("YOUTUBE_API_KEY", "OPENAI_API_KEY", "OPENVERSE_API_KEY",
+                 "FOUNDRY_WORKER_API_KEY", "FOUNDRY_WORKER_URL", "FOUNDRY_DOWNLOAD_SECRET",
+                 "STRIPE_SECRET_KEY", "STRIPE_PUBLISHABLE_KEY", "STRIPE_WEBHOOK_SECRET"):
         secret = os.environ.get(name)
         if secret:
             message = message.replace(secret, "[redacted]")
-    return message
+    return message.replace(str(root()), "[storage]").replace(str(REPO), "[application]")
 
 
 def run_job(job_id):
@@ -393,7 +398,7 @@ def dataset_payload(payload):
         id=identifier(payload['id'])
         if payload.get('manifest'):
             detail=dataset_detail(db,id,require_saleable=True)
-            if detail['price_cents']!=0:raise ValueError('Paid checkout is not live; use the buyer API for the legal record')
+            if detail['price_cents']!=0:raise ValueError('Paid files require a verified purchase; the buyer API retains the legal record')
             return buyer_manifest(db,id)
         return dataset_detail(db,id)
     finally:db.close()
@@ -462,6 +467,108 @@ def seo_payload(payload):
     finally:db.close()
 
 
+
+def refs_plan(payload):
+    refs = payload.get("refs")
+    if not isinstance(refs, list) or len(refs) != 6:
+        raise ValueError("Exactly six reference images are required")
+    decoded = []
+    for item in refs:
+        if not isinstance(item, dict) or not isinstance(item.get("data"), str):
+            raise ValueError("Invalid reference image")
+        if len(item["data"]) > 14 * 1024 * 1024:
+            raise ValueError("Reference image exceeds 10 MiB")
+        try:
+            data = base64.b64decode(item["data"], validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("Invalid reference encoding") from None
+        if not data or len(data) > 10 * 1024 * 1024:
+            raise ValueError("Reference image exceeds 10 MiB or is empty")
+        # Verify actual image bytes rather than trusting client names or MIME types.
+        from PIL import Image
+        from io import BytesIO
+        try:
+            with Image.open(BytesIO(data)) as image:
+                image.verify()
+        except Exception:
+            raise ValueError("Invalid reference image") from None
+        decoded.append(data)
+    upload = uuid.uuid4().hex
+    directory = root() / "web" / "refs" / upload
+    directory.mkdir(parents=True)
+    try:
+        for index, data in enumerate(decoded):
+            (directory / f"reference-{index}.png").write_bytes(data)
+        return make_plan({**payload, "upload": upload})
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+
+
+def start_job(batch, action, payload):
+    identifier(batch)
+    if action not in ("harvest", "filter", "qa", "review", "package"):
+        raise ValueError("Unknown action")
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid job payload")
+    batch_detail(batch)
+    job_id = uuid.uuid4().hex
+    job = {"id": job_id, "batch": batch, "action": action, "status": "queued", "log": ""}
+    path = root() / "web" / "jobs" / (job_id + ".json")
+    atomic(path, {**job, "payload": payload})
+    env = dict(os.environ, PYTHONPATH=str(REPO) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    try:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "job", job_id],
+                         cwd=REPO, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        job.update(status="failed", exit_code=1, log="Unable to start worker job")
+        atomic(path, job)
+        raise RuntimeError("Unable to start worker job") from None
+    return job
+
+
+def job_status(job_id):
+    path = root() / "web" / "jobs" / (identifier(job_id) + ".json")
+    job = json.loads(path.read_text())
+    if job.get("status") == "running" and job.get("pid"):
+        try:
+            os.kill(int(job["pid"]), 0)
+        except ProcessLookupError:
+            job.update(status="failed", exit_code=1,
+                       log=job.get("log", "") + "\nWorker stopped unexpectedly. Retry the stage to resume.")
+    job.pop("payload", None)
+    job["log"] = redact(job.get("log", ""))
+    return job
+
+
+def payments_payload(payload):
+    from foundry.payments import handle
+    db = registry_db()
+    try:
+        return handle(db, root(), payload)
+    finally:
+        db.close()
+
+
+def invoke(mode, payload=None):
+    payload = payload or {}
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid operation payload")
+    operations = {
+        "state": snapshot, "batch": lambda: batch_detail(payload["batch"]),
+        "plan": lambda: make_plan(payload), "refs_plan": lambda: refs_plan(payload),
+        "asset": lambda: asset(payload), "price": lambda: price(payload), "seed": seed,
+        "seo": lambda: seo_payload(payload), "health": health_payload, "demo": demo_payload,
+        "usage": usage_payload, "discovery": lambda: discovery(payload),
+        "dataset": lambda: dataset_payload(payload), "buyer": lambda: buyer_request(payload),
+        "payments": lambda: payments_payload(payload),
+    }
+    if mode not in operations:
+        raise ValueError("Unknown operation")
+    return operations[mode]()
+
+
 if __name__ == "__main__":
     try:
         mode = sys.argv[1]
@@ -469,12 +576,7 @@ if __name__ == "__main__":
         if mode == "job":
             run_job(sys.argv[2])
         else:
-            result = {"state": snapshot, "batch": lambda: batch_detail(payload["batch"]),
-                      "plan": lambda: make_plan(payload), "asset": lambda: asset(payload),
-                       "price": lambda: price(payload), "seed": seed,
-                      "seo":lambda:seo_payload(payload),"health":health_payload,"demo":demo_payload,"usage":usage_payload,"discovery":lambda:discovery(payload),
-                      "dataset":lambda:dataset_payload(payload),"buyer":lambda:buyer_request(payload)}[mode]()
-            print(json.dumps(result))
+            print(json.dumps(invoke(mode, payload)))
     except Exception as error:
         print(json.dumps({"error": str(error)}))
         sys.exit(1)

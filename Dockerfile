@@ -5,6 +5,7 @@ FROM mwader/static-ffmpeg:8.0.1@sha256:252705ff88532fa338e7065c21792756552f8fe7c
 FROM scratch AS cli-files
 COPY --chmod=644 pyproject.toml /app/pyproject.toml
 COPY --chmod=755 foundry/ /app/foundry/
+COPY --chmod=644 web/bridge.py /app/web/bridge.py
 COPY --chmod=755 scripts/worker.sh /usr/local/bin/foundry-worker
 COPY --chmod=755 scripts/foundry-entrypoint.py /usr/local/bin/foundry
 COPY --chmod=644 scripts/seed-demo.py /app/scripts/seed-demo.py
@@ -38,6 +39,13 @@ ENV HF_HOME=/data/models
 USER foundry
 ENTRYPOINT ["python", "/opt/foundry-start.py"]
 CMD ["foundry", "--help"]
+
+FROM cli AS worker-api
+ARG APP_VERSION=0.1.0
+ENV APP_VERSION=$APP_VERSION
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s CMD python -c "import os,urllib.request;r=urllib.request.Request('http://127.0.0.1:8000/health',headers={'Authorization':'Bearer '+os.environ.get('FOUNDRY_WORKER_API_KEY','')});urllib.request.urlopen(r,timeout=8)" || exit 1
+CMD ["python", "-m", "foundry.worker", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM node:22-bookworm-slim AS deps
 RUN --mount=type=secret,id=proxy_ca \

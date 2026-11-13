@@ -1,4 +1,5 @@
 import {NextRequest,NextResponse} from "next/server";
+import {buyerToken,paymentResponse} from "@/lib/payments";
 import {bridge} from "@/lib/server";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
@@ -10,6 +11,10 @@ async function dispatch(request:NextRequest,context:Context,post=false){
   const authorization=request.headers.get("authorization");
   const token=authorization?.startsWith("Bearer ")?authorization.slice(7):request.headers.get("x-api-key");
   const checkout=post&&parts.length===1&&parts[0]==="checkout";
+  if(checkout){
+    let body:Record<string,unknown>={};try{const parsed=await request.json();if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed))body=parsed}catch{/* Authentication/configuration takes priority; invalid fields remain a 400 once configured. */}
+    return paymentResponse({op:"checkout",token:buyerToken(request),dataset_id:body.dataset_id,email:body.email,idempotency_key:request.headers.get("idempotency-key")||undefined});
+  }
   const datasets=!post&&parts[0]==="datasets"&&(parts.length<=2||(parts.length===3&&parts[2]==="manifest"));
   const result=await bridge<Result>("buyer",{token,checkout,unknown:!checkout&&!datasets,
     id:datasets?parts[1]:undefined,manifest:parts[2]==="manifest",params:Object.fromEntries(request.nextUrl.searchParams)});
@@ -20,4 +25,3 @@ async function dispatch(request:NextRequest,context:Context,post=false){
 }
 export const GET=(request:NextRequest,context:Context)=>dispatch(request,context);
 export const POST=(request:NextRequest,context:Context)=>dispatch(request,context,true);
-// PLACEHOLDER: checkout only returns 501 after buyer-key validation. No payment provider exists.

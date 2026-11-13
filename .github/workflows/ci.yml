@@ -42,8 +42,14 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           FOUNDRY_PYTHON="$(command -v python)" npm run test:e2e
+          FOUNDRY_PYTHON="$(command -v python)" npm run test:e2e -- --config playwright.payments.config.ts
+          FOUNDRY_TEST_REMOTE=1 FOUNDRY_PYTHON="$(command -v python)" npm run test:e2e -- --config playwright.payments.config.ts
       - name: Docker build — CLI
         run: docker build --target cli -t foundry-cli .
+      - name: Docker build — worker API
+        run: |
+          docker build --target worker-api -t foundry-worker-api .
+          docker compose -f docker-compose.worker.yml config --quiet
       - name: Docker build — web
         run: docker build --build-arg APP_VERSION=${GITHUB_SHA} -t foundry-web .
       - name: Compose and complete local launch smoke
@@ -53,13 +59,17 @@ jobs:
           from pathlib import Path
           import secrets,os
           path=Path('work/ci.env')
-          path.write_text('FOUNDRY_ADMIN_USER=ci-admin\nFOUNDRY_ADMIN_PASSWORD='+secrets.token_hex(24)+'\nFOUNDRY_SESSION_SECRET='+secrets.token_hex(32)+'\n')
+          path.write_text('FOUNDRY_ADMIN_USER=ci-admin\nFOUNDRY_ADMIN_PASSWORD='+secrets.token_hex(24)+'\nFOUNDRY_SESSION_SECRET='+secrets.token_hex(32)+'\nFOUNDRY_WORKER_API_KEY='+secrets.token_hex(32)+'\n')
           os.chmod(path,0o600)
           PYCODE
           docker compose --env-file work/ci.env up --build --wait --wait-timeout 180
           docker compose --env-file work/ci.env run --rm cli-worker python /app/scripts/seed-demo.py --root /data
+          docker compose --env-file work/ci.env -f docker-compose.worker.yml -p foundry-worker-check up --build --wait --wait-timeout 180 worker-api
           bash scripts/smoke-test.sh
       - name: Stop verification stack
         if: always()
         run: |
-          if [ -f work/ci.env ]; then docker compose --env-file work/ci.env down -v; fi
+          if [ -f work/ci.env ]; then
+            docker compose --env-file work/ci.env -f docker-compose.worker.yml -p foundry-worker-check down -v
+            docker compose --env-file work/ci.env down -v
+          fi

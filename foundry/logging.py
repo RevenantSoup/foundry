@@ -7,7 +7,7 @@ import re
 import sys
 
 def redact(message):
-    for name in ('YOUTUBE_API_KEY','OPENAI_API_KEY','OPENVERSE_API_KEY','FOUNDRY_ADMIN_PASSWORD','FOUNDRY_SESSION_SECRET','SENTRY_DSN'):
+    for name in ('YOUTUBE_API_KEY','OPENAI_API_KEY','OPENVERSE_API_KEY','FOUNDRY_ADMIN_PASSWORD','FOUNDRY_SESSION_SECRET','SENTRY_DSN','STRIPE_SECRET_KEY','STRIPE_PUBLISHABLE_KEY','STRIPE_WEBHOOK_SECRET','FOUNDRY_WORKER_API_KEY','FOUNDRY_DOWNLOAD_SECRET'):
         value=os.environ.get(name)
         if value:message=message.replace(value,'[redacted]')
     message=re.sub(r'Bearer\s+[^\s"\']+','Bearer [redacted]',message,flags=re.I)

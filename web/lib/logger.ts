@@ -1,4 +1,4 @@
-const secretNames=["FOUNDRY_ADMIN_PASSWORD","FOUNDRY_SESSION_SECRET","YOUTUBE_API_KEY","OPENAI_API_KEY","OPENVERSE_API_KEY","SENTRY_DSN"];
+const secretNames=["FOUNDRY_ADMIN_PASSWORD","FOUNDRY_SESSION_SECRET","YOUTUBE_API_KEY","OPENAI_API_KEY","OPENVERSE_API_KEY","SENTRY_DSN","STRIPE_SECRET_KEY","STRIPE_PUBLISHABLE_KEY","STRIPE_WEBHOOK_SECRET","FOUNDRY_WORKER_API_KEY","FOUNDRY_DOWNLOAD_SECRET"];
 export function redact(value:string){
  let clean=value;for(const name of secretNames){const secret=process.env[name];if(secret)clean=clean.split(secret).join("[redacted]")}
  return clean.replace(/Bearer\s+[^\s"']+/gi,"Bearer [redacted]").replace(/fdy_[A-Za-z0-9_-]+/g,"[buyer-key-redacted]");

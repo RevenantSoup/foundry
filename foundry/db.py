@@ -63,13 +63,21 @@ class Database:
         CREATE TABLE IF NOT EXISTS api_rate_limits(
           key_id TEXT, window_start INTEGER, requests INTEGER NOT NULL,
           PRIMARY KEY(key_id,window_start));
+        CREATE TABLE IF NOT EXISTS orders(
+          id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL, buyer_email TEXT NOT NULL,
+          stripe_session_id TEXT UNIQUE, amount INTEGER NOT NULL, currency TEXT NOT NULL,
+          status TEXT NOT NULL, buyer_key_id TEXT NOT NULL, idempotency_key TEXT,
+          fingerprint TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, stripe_payment_id TEXT,
+          created_at INTEGER NOT NULL, UNIQUE(buyer_key_id,idempotency_key));
+        CREATE TABLE IF NOT EXISTS download_grants(
+          order_id TEXT PRIMARY KEY, nonce TEXT NOT NULL, expires_at INTEGER NOT NULL);
         PRAGMA user_version=4;
         """)
         columns={r[1] for r in self.conn.execute('PRAGMA table_info(datasets)')}
         for name in ('train_count','validation_count'):
             if name not in columns:
                 self.conn.execute(f'ALTER TABLE datasets ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0')
-        self.conn.execute('PRAGMA user_version=5')
+        self.conn.execute('PRAGMA user_version=6')
         self.conn.commit()
     def close(self):
         self.conn.close()

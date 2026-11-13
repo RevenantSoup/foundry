@@ -18,7 +18,7 @@ remaining for the release owner, not an implied production guarantee.
 - [x] Engineering: seeded demos are idempotent, synthetic-labeled, non-saleable and preserve 200-sample QA. Idempotency pytest passed; two labeled non-saleable fixtures each retain the required 200-sample QA.
 - [ ] Release owner: demo/test data removed from the live CLIP root or unmistakably labeled.
 - [ ] Release owner: attribution, licence obligations and exact manifest SHA-256 checked for every saleable launch dataset.
-- [x] Engineering: checkout remains clearly marked PLACEHOLDER with 501 and no payment/card collection. Buyer API browser test verified the unchanged 501 contract.
+- [ ] Phase 5 operator: verify Stripe TEST 4242 purchase, signed webhook, single paid grant and 24-hour expiry. Unconfigured checkout retains 501; no live money/card storage.
 - [x] Engineering: keyboard filters/login/tour, visible focus, image alt text, icon labels and semantic headings checked. Semantic controls and labels inspected; tour Escape/dismissal tested. Broader assistive-technology audit remains an operator task.
 - [x] Engineering: dashboard, wizard, QA grid, catalog and detail checked at 390px; no document overflow. All five routes passed the 390px browser test; fixed a hidden mobile heading.
 - [ ] Operator: NEXT_PUBLIC_SITE_URL set before build; canonical/OG/Twitter, robots and sitemap inspected with the real domain.
@@ -29,8 +29,8 @@ remaining for the release owner, not an implied production guarantee.
 ## Go live
 
 - [ ] Operator: follow docs/DEPLOYMENT.md for the supported single-host Docker web + worker deployment.
-- [ ] Future web owner: implement authenticated remote bridge/persistence before attempting full Vercel deployment.
-- [ ] Future web owner: import Vercel project with web root and required build/server env only after that bridge is verified.
+- [ ] Phase 5 operator: deploy and validate the implemented authenticated HTTPS worker with persistent SQLite/files.
+- [ ] Web owner: import Vercel with web root and server-only worker URL/key after authenticated worker health is verified.
 - [ ] Operator: deploy reviewed CLI-worker image and persistent volume; schedules use UTC and pause for real QA.
 - [ ] Release owner: run smoke test against the actual production origin and inspect public health/version.
 - [ ] Release owner: verify first keyed buyer list/detail/manifest request and revoked-key behavior.
@@ -40,7 +40,7 @@ remaining for the release owner, not an implied production guarantee.
 
 - [ ] Operator: monitor provider quota >=80%, 429s, retries, verifier errors and disk growth.
 - [ ] Operator: inspect structured logs; rotate admin secrets/buyer keys if compromised.
-- [ ] Release owner: confirm no placeholder checkout is mistaken for an actual purchase.
+- [ ] Release owner: ensure test-only checkout is labeled and live Stripe credentials are rejected.
 - [ ] Operator: verify scheduled batches and human QA approval before new exports appear.
 - [ ] Operator: retain a known-good hardened image/data snapshot and exercise the rollback procedure.
 
@@ -53,3 +53,14 @@ remaining for the release owner, not an implied production guarantee.
   be checked after push.
 - Additional malformed-Origin API regression passed; the full 8-test browser run
   and this extra request test cover 9 checks. CI reruns the complete suite.
+
+## Phase 5 source verification
+
+- [x] Engineering: 82 root pytest and 8 bridge tests passed; original CLI/legal/quota gates remain covered.
+- [x] Engineering: local and remote payment API tests verify signed raw webhooks, pending/paid orders, duplicate deliveries, mismatch rejection and expiring scoped downloads.
+- [x] Engineering: complete remote wizard and local fallback regressions passed; worker credential errors/disconnects/invalid responses fail closed without local writes.
+- [x] Engineering: lint, Next production build, CLI/web/worker Docker targets and worker Compose config/build passed. Authenticated Python 3.11 worker container health verified using a RAM SDK cache on the constrained Cloud host.
+- [ ] Operator: run the documented actual Stripe-hosted 4242 purchase, real webhook delivery and paid-download/expiry check using account test credentials (not supplied during implementation).
+- [ ] Operator: deploy worker HTTPS/reverse proxy and Vercel environments, verify routing/secrets/capacity and complete the hosted flow; no production deployment is claimed.
+
+Exact source commands and limitations: docs/PHASE5_VERIFICATION.md.

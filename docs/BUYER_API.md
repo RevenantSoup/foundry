@@ -144,29 +144,12 @@ buyer access fail closed. Legacy valid packages are registered by fingerprint
 during migration/first discovery; packages with missing rights/provenance or
 unapproved QA are unavailable. Registration never invents a price.
 
-## PLACEHOLDER: Checkout
+## Phase 5 test checkout
 
-```http
-POST /api/v1/checkout
-```
-
-A valid key is still required and rate limiting still applies. This route always
-returns **501**:
-
-```json
-{
-  "error": "checkout_not_implemented",
-  "message": "Checkout is a placeholder in Phase 3. No payment is processed."
-}
-```
-
-```bash
-curl -X POST -H "Authorization: Bearer $FOUNDRY_BUYER_KEY" \
-  http://localhost:3000/api/v1/checkout
-```
-
-The **Buy dataset** UI opens a panel saying: “Checkout is not live yet — this is
-a placeholder. No payment will be taken.” No provider, redirect, card field, order,
-or charge is implemented. Free saleable datasets also expose a legal-manifest
-download from the detail page; paid datasets expose their legal record through
-the read-only buyer API without pretending a purchase occurred.
+POST /api/v1/checkout accepts dataset_id/email, existing buyer auth/rate limits
+and optional Idempotency-Key. Configured test mode returns session_id/url/order_id;
+missing test configuration retains 501 checkout_not_implemented. Verified raw-body
+POST /api/v1/webhooks/stripe alone can grant paid access. Owner-key-authenticated
+GET /api/v1/orders/{id} returns status and a relative signed 24-hour URL when paid.
+GET /api/v1/downloads uses that signed grant. See DEPLOYMENT.md for the complete
+test setup, exact error behavior and hosted worker architecture.

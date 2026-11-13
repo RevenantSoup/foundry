@@ -203,7 +203,7 @@ npm run dev
 
 Open **http://localhost:3000**. The server can also be reached on the development
 environment's forwarded port. Phase 4 adds a single-admin login for owner workflows; the marketplace remains
-public and checkout remains a no-payment placeholder. See Local admin setup below.
+public and checkout supports configured Stripe test mode. See Local admin setup below.
 
 For a production build on the same machine with the Python environment available:
 
@@ -274,7 +274,7 @@ documented in the CLI section above.
   pricing disabled. That platform label is not permission to resell.
   CC-BY credit/change notices and CC-BY-SA ShareAlike requirements are visible.
   Prices are editable listing drafts. Rights-cleared packages appear in the public
-  marketplace; checkout remains a no-payment placeholder. Legal clearance is
+  marketplace; configured checkout uses Stripe test mode only. Legal clearance is
   still the operator's responsibility.
 - **Analytics /analytics**: yield and precision across batches, CLIP score
   distribution, source/licence mix, and quota usage over time. Synthetic batches
@@ -469,7 +469,7 @@ As in Phase 2, platform_public_as_is is retained unchanged but is not a resale
 licence. YouTube/platform packages and synthetic fixtures remain in the existing
 private archive with pricing disabled, rather than becoming sale listings.
 
-### Buyer API and PLACEHOLDER checkout
+### Buyer API and Stripe test checkout
 
 ```bash
 foundry --root ./data api-key create --name "buyer-acme"
@@ -478,7 +478,7 @@ foundry --root ./data api-key revoke <key-id>
 ```
 
 Keys are shown once; api_keys stores only SHA-256 hashes and lifecycle timestamps.
-All **/api/v1/** routes require Authorization: Bearer or X-API-Key. Missing/invalid
+Buyer dataset, checkout and order routes require Authorization: Bearer or X-API-Key. Missing/invalid
 keys return 401, revoked/inactive keys 403, and over 60 authenticated requests in
 a fixed UTC minute returns 429 + Retry-After. Usage is persisted by key ID.
 
@@ -486,13 +486,26 @@ a fixed UTC minute returns 429 + Retry-After. Usage is persisted by key ID.
 - GET **/api/v1/datasets/[id]**: full legal metadata, price and reviewed previews.
 - GET **/api/v1/datasets/[id]/manifest**: JSON legal record including full
   attribution, licence list, manifest SHA-256, image/source/licence records and QA.
-- POST **/api/v1/checkout**: **PLACEHOLDER**, authenticated but always 501:
-  checkout_not_implemented. No payment is processed.
+- POST **/api/v1/checkout**: authenticated Stripe test Checkout. Accepts dataset_id
+  and email; returns session_id, url, order_id. Use Idempotency-Key for retries.
+  Missing/invalid test configuration retains 501 checkout_not_implemented.
+- GET **/api/v1/orders/[id]**: owner-key-only status and signed 24-hour paid download.
+- POST **/api/v1/webhooks/stripe**: raw-body Stripe signature authentication.
+- GET **/api/v1/downloads?token=...**: paid signed grant for images + manifest ZIP;
+  kind=manifest returns CSV. Unknown/unpaid/tampered/expired links are denied.
 
-The Buy dataset button only opens the explicitly marked placeholder panel.
-There is no payment provider, card form, redirect or charge. Free datasets can
-download their legal JSON manifest directly from the UI. Owner exports remain
-available in the existing local workspace. Buyer keys are not dashboard auth.
+The Buy dataset form collects only buyer email and an existing buyer API key,
+then redirects to Stripe-hosted **test** Checkout. Card details never pass through
+Foundry. Buyer keys remain separate from dashboard sessions. Existing free legal
+manifests and owner exports remain available; buyer manifest JSON remains a legal
+record, not an entitlement to paid images. Live Stripe keys are rejected.
+
+With FOUNDRY_WORKER_URL set, all operations/files use an authenticated HTTPS worker
+(FOUNDRY_WORKER_API_KEY, server-only). Without it the local subprocess bridge is
+retained. Worker owns Stripe credentials, SQLite, jobs and files; Vercel needs its
+worker URL/key and dashboard variables. See **docs/DEPLOYMENT.md** for the exact
+variable table, worker Compose setup, Stripe webhook/test-card flow, signed links
+and hosted upload/streaming limits. No production deployment is performed here.
 
 See **docs/BUYER_API.md** for curl examples, schema, filters, hashing and statuses.
 
@@ -518,7 +531,7 @@ exhaustion, metadata rejection, verifier tokens/fail-closed verdicts, manifest
 fingerprints, combined search, pricing, hashed/revoked/rate-limited keys, schedules,
 locks, and real scheduled pause/resume at QA. Browser tests extend the prior wizard
 checks with real Next.js buyer routes, legal manifests, combined URL filters,
-price edits, reviewed previews and the no-payment placeholder.
+price edits, reviewed previews and unconfigured-checkout 501 behavior.
 
 Live validation requires usable provider access. In the Phase 3 Cloud verification
 environment, Openverse returned a 403 HTML “Just a moment” access challenge, and
@@ -671,7 +684,7 @@ The Tour button allows an explicit restart.
   quota keeps exit 2. Help/version preserve successful exits.
 - GET /api/health returns status, db and version; DB failure is HTTP 503. Internal
   API errors consistently include error + message. Buyer error codes/contracts
-  and the checkout 501 placeholder remain intact.
+  and unconfigured-checkout 501 behavior remain intact.
 - Logging is centralized in foundry/logging.py and web/lib/logger.ts. Optional
   SENTRY_DSN activates server hooks; unset works without any monitoring vendor.
   Docker includes the Python optional SDK; source installs can use
@@ -711,7 +724,7 @@ Set FOUNDRY_SMOKE_URL to another origin, SMOKE_PYTHON to a host interpreter, or
 FOUNDRY_DOCKER_CA_FILE for a managed build proxy. It never starts payments.
 
 See **docs/DEPLOYMENT.md** for the supported persistent-host arrangement, explicit
-Vercel limitations/preparation, auth rotation, backups, rollback and monitoring.
+Vercel + authenticated worker setup, Stripe test mode, auth rotation, backups, rollback and monitoring.
 See **LAUNCH_CHECKLIST.md** for honestly checked local evidence and outstanding
-operator work. Vercel remote transport, real provider access, public TLS/domain,
-production load/restore drills and actual payment processing are not claimed done.
+operator work. Real provider access, public TLS/domain, production load/restore
+drills and a hosted Stripe test purchase require operator verification. No live payments are supported.
